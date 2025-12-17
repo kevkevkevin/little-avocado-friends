@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    /* Basic Options */
+    "target": "es2016",
+    "module": "commonjs",             /* This creates code Node.js understands */
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "rootDir": "./",
+    
+    /* Strictness */
+    "strict": true,
+    "noImplicitAny": false,           /* Loosens rules a bit for beginners */
+
+    /* Interop (The Magic Fix) */
+    "esModuleInterop": true,          /* Allows "import express from 'express'" to work */
+    "skipLibCheck": true,             /* Ignores errors in library files */
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["server.ts"],
+  "exclude": ["node_modules"]
+}
