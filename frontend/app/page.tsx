@@ -59,6 +59,8 @@ export default function Home() {
   const bgmRef = useRef<HTMLAudioElement | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
+  
+  // --- DAILY TASKS STATE (Lazy Init Fix) ---
   const [tasks, setTasks] = useState({ login: false, click: false, share: false });
   const [dailyCount, setDailyCount] = useState<number>(0);
   const MAX_DAILY = 100;
@@ -78,22 +80,36 @@ export default function Home() {
         bgmRef.current.volume = 0.3; 
     }
     if (musicPlaying) bgmRef.current.pause();
-    else bgmRef.current.play().catch((e) => console.log("Interaction needed"));
+    else bgmRef.current.play().catch((e) => console.log("Interaction needed", e));
     setMusicPlaying(!musicPlaying);
   };
 
-  // --- DAILY TASKS ---
+  // --- DAILY TASKS LOGIC ---
   useEffect(() => {
-    const today = new Date().toDateString(); 
-    const savedDate = localStorage.getItem('avocado_last_login');
-    const savedTasks = JSON.parse(localStorage.getItem('avocado_tasks') || '{}');
+    // We only run this once on mount to check local storage
+    if (typeof window !== 'undefined') {
+        const today = new Date().toDateString(); 
+        const savedDate = localStorage.getItem('avocado_last_login');
+        const savedTasksStr = localStorage.getItem('avocado_tasks');
+        
+        let currentTasks = { login: false, click: false, share: false };
 
-    if (savedDate !== today) {
-        localStorage.setItem('avocado_last_login', today);
-        setTasks({ login: true, click: false, share: false });
-        localStorage.setItem('avocado_tasks', JSON.stringify({ login: true, click: false, share: false }));
-    } else {
-        setTasks(savedTasks);
+        if (savedTasksStr) {
+            try {
+                currentTasks = JSON.parse(savedTasksStr);
+            } catch (e) { console.error("Error parsing tasks", e); }
+        }
+
+        if (savedDate !== today) {
+            // New Day: Reset
+            localStorage.setItem('avocado_last_login', today);
+            const resetTasks = { login: true, click: false, share: false };
+            setTasks(resetTasks);
+            localStorage.setItem('avocado_tasks', JSON.stringify(resetTasks));
+        } else {
+            // Same Day: Load saved
+            setTasks(currentTasks);
+        }
     }
   }, []);
 
@@ -200,7 +216,7 @@ export default function Home() {
     socket.on('daily_reset', () => { setDailyCount(0); });
 
     return () => { if (socket) socket.disconnect(); };
-  }, [user]); // We depend on 'user' so we can auto-rejoin correctly
+  }, [user]); 
 
   // Keyboard Listener
   useEffect(() => {
@@ -236,10 +252,13 @@ export default function Home() {
       if (now - lastMoveTime.current > 30) {
         const xPercent = (x / window.innerWidth) * 100;
         const yPercent = (y / window.innerHeight) * 100;
-        if (socket?.id) {
+        
+        // --- FIX: SAFE SOCKET ACCESS ---
+        const sockId = socket?.id;
+        if (sockId) {
             setPlayers((prev) => {
-                if (!prev[socket?.id!]) return prev;
-                return { ...prev, [socket!.id!]: { ...prev[socket!.id!], x: xPercent, y: yPercent } };
+                if (!prev[sockId]) return prev;
+                return { ...prev, [sockId]: { ...prev[sockId], x: xPercent, y: yPercent } };
             });
         }
         socket.emit('mouse_move', { x: xPercent, y: yPercent });
@@ -423,7 +442,7 @@ export default function Home() {
           <div style={{ background: 'white', padding: '2px 8px', borderRadius: '10px', color: '#5D4037', fontSize: '10px', fontWeight: 'bold', marginBottom: '2px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', whiteSpace: 'nowrap' }}>{player.solanaAddress.slice(0, 4)}</div>
           <div style={{ fontSize: '1em', filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.2))', animation: 'float 2s ease-in-out infinite' }}>🥑</div>
           {player.clicks > 0 && <div style={{ fontSize: '10px', color: '#FFF', background: '#81C784', padding: '0 4px', borderRadius: '4px', marginTop: '-5px' }}>{player.clicks}</div>}
-        </div> 
+        </div>
       ))}
     </main>
   );
