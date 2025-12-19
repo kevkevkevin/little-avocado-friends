@@ -60,8 +60,26 @@ export default function Home() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   
-  // --- DAILY TASKS STATE ---
-  const [tasks, setTasks] = useState({ login: false, click: false, share: false });
+  // --- DAILY TASKS (Lazy Init - Fixes Vercel Error) ---
+  const [tasks, setTasks] = useState(() => {
+    if (typeof window === 'undefined') return { login: false, click: false, share: false };
+    try {
+        // Check date first
+        const today = new Date().toDateString();
+        const savedDate = localStorage.getItem('avocado_last_login');
+        if (savedDate !== today) {
+            localStorage.setItem('avocado_last_login', today);
+            const reset = { login: true, click: false, share: false };
+            localStorage.setItem('avocado_tasks', JSON.stringify(reset));
+            return reset;
+        }
+        const saved = localStorage.getItem('avocado_tasks');
+        return saved ? JSON.parse(saved) : { login: false, click: false, share: false };
+    } catch {
+        return { login: false, click: false, share: false };
+    }
+  });
+
   const [dailyCount, setDailyCount] = useState<number>(0);
   const MAX_DAILY = 100;
 
@@ -83,33 +101,6 @@ export default function Home() {
     else bgmRef.current.play().catch((e) => console.log("Interaction needed", e));
     setMusicPlaying(!musicPlaying);
   };
-
-  // --- DAILY TASKS LOGIC (FIXED) ---
-  useEffect(() => {
-    // Only run on client side
-    if (typeof window !== 'undefined') {
-        const today = new Date().toDateString(); 
-        const savedDate = localStorage.getItem('avocado_last_login');
-        const savedTasksStr = localStorage.getItem('avocado_tasks');
-        
-        let currentTasks = { login: false, click: false, share: false };
-
-        if (savedTasksStr) {
-            try {
-                currentTasks = JSON.parse(savedTasksStr);
-            } catch (e) { console.error(e); }
-        }
-
-        if (savedDate !== today) {
-            localStorage.setItem('avocado_last_login', today);
-            const resetTasks = { login: true, click: false, share: false };
-            setTasks(resetTasks);
-            localStorage.setItem('avocado_tasks', JSON.stringify(resetTasks));
-        } else {
-            setTasks(currentTasks);
-        }
-    }
-  }, []); // Empty dependency array ensures this runs once
 
   const updateTask = (task: 'click' | 'share') => {
     if (tasks[task]) return; 
