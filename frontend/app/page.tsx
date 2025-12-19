@@ -60,7 +60,7 @@ export default function Home() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   
-  // --- DAILY TASKS STATE (Lazy Init Fix) ---
+  // --- DAILY TASKS STATE ---
   const [tasks, setTasks] = useState({ login: false, click: false, share: false });
   const [dailyCount, setDailyCount] = useState<number>(0);
   const MAX_DAILY = 100;
@@ -84,9 +84,9 @@ export default function Home() {
     setMusicPlaying(!musicPlaying);
   };
 
-  // --- DAILY TASKS LOGIC ---
+  // --- DAILY TASKS LOGIC (FIXED) ---
   useEffect(() => {
-    // We only run this once on mount to check local storage
+    // Only run on client side
     if (typeof window !== 'undefined') {
         const today = new Date().toDateString(); 
         const savedDate = localStorage.getItem('avocado_last_login');
@@ -97,21 +97,19 @@ export default function Home() {
         if (savedTasksStr) {
             try {
                 currentTasks = JSON.parse(savedTasksStr);
-            } catch (e) { console.error("Error parsing tasks", e); }
+            } catch (e) { console.error(e); }
         }
 
         if (savedDate !== today) {
-            // New Day: Reset
             localStorage.setItem('avocado_last_login', today);
             const resetTasks = { login: true, click: false, share: false };
             setTasks(resetTasks);
             localStorage.setItem('avocado_tasks', JSON.stringify(resetTasks));
         } else {
-            // Same Day: Load saved
             setTasks(currentTasks);
         }
     }
-  }, []);
+  }, []); // Empty dependency array ensures this runs once
 
   const updateTask = (task: 'click' | 'share') => {
     if (tasks[task]) return; 
