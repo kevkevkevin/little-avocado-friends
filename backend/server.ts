@@ -29,18 +29,18 @@ const io = new Server(server, {
   }
 });
 
-// --- 🍃 MONGODB SETUP (Robust) ---
+// --- 🍃 MONGODB SETUP ---
 const MONGO_URI = process.env.MONGO_URI || "";
-let isDbConnected = false; // Flag to track connection
+let isDbConnected = false;
 
 if (!MONGO_URI) {
-    console.error("❌ FATAL: MONGO_URI is missing. Check Render Environment Variables.");
+    console.error("❌ FATAL: MONGO_URI is missing.");
 } else {
     mongoose.connect(MONGO_URI)
       .then(() => {
           console.log("✅ Connected to MongoDB!");
           isDbConnected = true;
-          loadGameState(); // Load state only after connection
+          loadGameState();
       })
       .catch(err => console.error("❌ MongoDB Connection Error:", err));
 }
@@ -50,13 +50,16 @@ const UserSchema = new mongoose.Schema({
     address: { type: String, required: true, unique: true },
     clicks: { type: Number, default: 0 },
     coins: { type: Number, default: 0 },
-    shards: { type: Number, default: 0 }
+    shards: { type: Number, default: 0 },
+    dailyClicks: { type: Number, default: 0 },
+    lastDailyDate: { type: String, default: "" }
 });
 
 const GameStateSchema = new mongoose.Schema({
     id: { type: String, default: 'global' },
     weeklyShards: { type: Number, default: 100 },
-    totalClicks: { type: Number, default: 0 }
+    totalClicks: { type: Number, default: 0 },
+    currentBgColor: { type: String, default: "#5D4037" } // 🎨 Save the color!
 });
 
 const User = mongoose.model('User', UserSchema);
@@ -73,45 +76,64 @@ interface Player {
   clicks: number;
   coins: number;
   shards: number;
+  dailyClicks: number;
 }
 
 let players: Record<string, Player> = {};
 let globalClicks = 0;
 let weeklyShards = 100;
-const BACKGROUND_COLORS = ["#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548", "#2E7D32", "#1B5E20", "#BF360C"];
+let currentBgColor = "#5D4037"; // 🎨 Track current color in memory
 
-// --- INITIALIZE FROM DB ---
+const BACKGROUND_COLORS = [
+    "#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548", 
+    "#2E7D32", "#1B5E20", "#BF360C", "#00695C", "#AD1457", 
+    "#6A1B9A", "#283593", "#C62828", "#F9A825"
+];
+
+// --- INITIALIZE ---
 async function loadGameState() {
     if (!isDbConnected) return;
     try {
         let state = await GameState.findOne({ id: 'global' });
         if (!state) {
-            state = await GameState.create({ id: 'global', weeklyShards: 100, totalClicks: 0 });
+            state = await GameState.create({ 
+                id: 'global', 
+                weeklyShards: 100, 
+                totalClicks: 0, 
+                currentBgColor: "#5D4037" 
+            });
         }
         weeklyShards = state.weeklyShards;
         globalClicks = state.totalClicks;
-        console.log(`💎 Loaded State: ${weeklyShards} Shards left, ${globalClicks} Total Clicks`);
-    } catch (e) {
-        console.log("⚠️ DB Load Error (Non-fatal)", e);
-    }
+        currentBgColor = state.currentBgColor || "#5D4037"; // Load saved color
+        console.log(`💎 Loaded State: ${weeklyShards} Shards, ${globalClicks} Clicks, Color: ${currentBgColor}`);
+    } catch (e) { console.log("⚠️ DB Load Error (Non-fatal)", e); }
 }
 
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('join_game', async (address: string) => {
-    let userClicks = 0, userCoins = 0, userShards = 0;
+    let userClicks = 0, userCoins = 0, userShards = 0, userDaily = 0;
 
-    // Try to load from DB, but fallback to 0 if DB is down
     if (isDbConnected) {
         try {
             let user = await User.findOne({ address });
+            const today = new Date().toDateString();
+
             if (!user) {
-                user = await User.create({ address, clicks: 0, coins: 0, shards: 0 });
+                user = await User.create({ address, clicks: 0, coins: 0, shards: 0, dailyClicks: 0, lastDailyDate: today });
+            } else {
+                if (user.lastDailyDate !== today) {
+                    user.dailyClicks = 0;
+                    user.lastDailyDate = today;
+                    await user.save();
+                }
             }
             userClicks = user.clicks;
             userCoins = user.coins;
             userShards = user.shards;
+            userDaily = user.dailyClicks;
         } catch (e) { console.error("Error loading user:", e); }
     }
 
@@ -124,10 +146,12 @@ io.on('connection', (socket) => {
       size: 30,
       clicks: userClicks,
       coins: userCoins,
-      shards: userShards
+      shards: userShards,
+      dailyClicks: userDaily
     };
 
-    // Get Leaderboard (Safe)
+    socket.emit('your_daily_progress', userDaily);
+
     const highscores: Record<string, any> = {};
     if (isDbConnected) {
         try {
@@ -140,7 +164,7 @@ io.on('connection', (socket) => {
 
     socket.emit('init_state', { 
         players, 
-        backgroundColor: BACKGROUND_COLORS[0], 
+        backgroundColor: currentBgColor, // 🎨 Send the saved color!
         globalClicks,
         shards: weeklyShards
     });
@@ -172,7 +196,6 @@ io.on('connection', (socket) => {
                   await User.updateOne({ address: players[socket.id].solanaAddress }, { $inc: { shards: 1 } }).catch(()=>{});
                   await GameState.updateOne({ id: 'global' }, { weeklyShards: weeklyShards }).catch(()=>{});
               }
-              
               io.emit('shard_collected', { id: socket.id, shards: players[socket.id].shards });
           }
           io.emit('mining_update', weeklyShards);
@@ -189,41 +212,61 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('click_screen', () => {
-    if (players[socket.id]) {
-      players[socket.id].clicks++;
+  socket.on('click_screen', async () => {
+    const p = players[socket.id];
+    if (p) {
+      if (p.dailyClicks >= 100) { 
+          socket.emit('error_limit_reached');
+          return; 
+      }
+
+      p.clicks++;
+      p.dailyClicks++;
       globalClicks++;
 
-      if (globalClicks % 50 === 0) {
+      // 🎨 NEW MILESTONE LOGIC
+      // 50, 100, 500, 1000, then every 1000 (2000, 3000, etc.)
+      const milestones = [50, 100, 500, 1000];
+      const isMilestone = milestones.includes(globalClicks) || (globalClicks >= 2000 && globalClicks % 1000 === 0);
+
+      if (isMilestone) {
           const randomColor = BACKGROUND_COLORS[Math.floor(Math.random() * BACKGROUND_COLORS.length)];
+          currentBgColor = randomColor; // Update memory
           io.emit('bg_update', randomColor);
+          
+          // Save color to DB immediately
+          if(isDbConnected) {
+             await GameState.updateOne({ id: 'global' }, { currentBgColor: randomColor }).catch(()=>{});
+          }
       }
 
       io.emit('score_update', { 
           id: socket.id, 
-          clicks: players[socket.id].clicks, 
+          clicks: p.clicks, 
           globalClicks 
       });
+
+      if (isDbConnected) {
+          try {
+             await User.updateOne(
+                 { address: p.solanaAddress }, 
+                 { $inc: { clicks: 1, dailyClicks: 1 } }
+             );
+          } catch(e) {}
+      }
     }
   });
 
-  socket.on('disconnect', async () => {
+  socket.on('coin_spawned', (coin) => io.emit('coin_spawned', coin));
+
+  socket.on('disconnect', () => {
     if (players[socket.id]) {
-        if (isDbConnected) {
-            try {
-                await User.updateOne(
-                    { address: players[socket.id].solanaAddress }, 
-                    { clicks: players[socket.id].clicks }
-                );
-            } catch(e) {}
-        }
         delete players[socket.id];
         io.emit('player_left', socket.id);
     }
   });
 });
 
-// Periodic Save (Only if connected)
 setInterval(async () => {
     if (isDbConnected) {
         try {
@@ -232,10 +275,7 @@ setInterval(async () => {
     }
 }, 60000);
 
-// Health Check
-app.get('/', (req, res) => {
-    res.send('🥑 Avocado Server is RUNNING!');
-});
+app.get('/', (req, res) => { res.send('🥑 Avocado Server is RUNNING!'); });
 
 const PORT = process.env.PORT || 3001; 
 server.listen(PORT, () => {
