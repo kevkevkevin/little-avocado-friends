@@ -59,7 +59,7 @@ const GameStateSchema = new mongoose.Schema({
     id: { type: String, default: 'global' },
     weeklyShards: { type: Number, default: 100 },
     totalClicks: { type: Number, default: 0 },
-    currentBgColor: { type: String, default: "#5D4037" } // 🎨 Save the color!
+    currentBgColor: { type: String, default: "#5D4037" }
 });
 
 const User = mongoose.model('User', UserSchema);
@@ -82,7 +82,7 @@ interface Player {
 let players: Record<string, Player> = {};
 let globalClicks = 0;
 let weeklyShards = 100;
-let currentBgColor = "#5D4037"; // 🎨 Track current color in memory
+let currentBgColor = "#5D4037"; // 🎨 State Variable
 
 const BACKGROUND_COLORS = [
     "#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548", 
@@ -105,8 +105,8 @@ async function loadGameState() {
         }
         weeklyShards = state.weeklyShards;
         globalClicks = state.totalClicks;
-        currentBgColor = state.currentBgColor || "#5D4037"; // Load saved color
-        console.log(`💎 Loaded State: ${weeklyShards} Shards, ${globalClicks} Clicks, Color: ${currentBgColor}`);
+        currentBgColor = state.currentBgColor || "#5D4037"; 
+        console.log(`💎 Loaded: ${globalClicks} Clicks, Color: ${currentBgColor}`);
     } catch (e) { console.log("⚠️ DB Load Error (Non-fatal)", e); }
 }
 
@@ -152,24 +152,26 @@ io.on('connection', (socket) => {
 
     socket.emit('your_daily_progress', userDaily);
 
-    const highscores: Record<string, any> = {};
-    if (isDbConnected) {
-        try {
-            const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
-            allUsers.forEach(u => {
-                highscores[u.address] = { clicks: u.clicks, coins: u.coins, shards: u.shards };
-            });
-        } catch(e) {}
-    }
-
+    // Initial State now includes the correct color
     socket.emit('init_state', { 
         players, 
-        backgroundColor: currentBgColor, // 🎨 Send the saved color!
+        backgroundColor: currentBgColor, 
         globalClicks,
         shards: weeklyShards
     });
     
-    io.emit('leaderboard_update', highscores);
+    // Send Leaderboard
+    if (isDbConnected) {
+        try {
+            const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
+            const highscores: Record<string, any> = {};
+            allUsers.forEach(u => {
+                highscores[u.address] = { clicks: u.clicks, coins: u.coins, shards: u.shards };
+            });
+            socket.emit('leaderboard_update', highscores);
+        } catch(e) {}
+    }
+    
     io.emit('player_joined', players[socket.id]);
   });
 
@@ -224,26 +226,27 @@ io.on('connection', (socket) => {
       p.dailyClicks++;
       globalClicks++;
 
-      // 🎨 NEW MILESTONE LOGIC
-      // 50, 100, 500, 1000, then every 1000 (2000, 3000, etc.)
+      // 🎨 CHECK MILESTONES (50, 100, 500, 1000, 2000...)
       const milestones = [50, 100, 500, 1000];
       const isMilestone = milestones.includes(globalClicks) || (globalClicks >= 2000 && globalClicks % 1000 === 0);
 
       if (isMilestone) {
           const randomColor = BACKGROUND_COLORS[Math.floor(Math.random() * BACKGROUND_COLORS.length)];
-          currentBgColor = randomColor; // Update memory
-          io.emit('bg_update', randomColor);
+          currentBgColor = randomColor; 
+          io.emit('bg_update', randomColor); // Event for sound/confetti
           
-          // Save color to DB immediately
           if(isDbConnected) {
              await GameState.updateOne({ id: 'global' }, { currentBgColor: randomColor }).catch(()=>{});
           }
       }
 
+      // 🛠️ SELF-HEALING: Send the color in EVERY score update
+      // This forces clients to sync color even if they missed the 'bg_update' event
       io.emit('score_update', { 
           id: socket.id, 
           clicks: p.clicks, 
-          globalClicks 
+          globalClicks,
+          bgColor: currentBgColor // <--- The Fix
       });
 
       if (isDbConnected) {

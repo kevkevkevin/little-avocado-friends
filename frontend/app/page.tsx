@@ -5,7 +5,6 @@ import io, { Socket } from 'socket.io-client';
 import { usePrivy } from '@privy-io/react-auth';
 import confetti from 'canvas-confetti';
 
-// --- TYPES ---
 interface Player {
   id: string;
   x: number;
@@ -38,7 +37,6 @@ export default function Home() {
   const { login, authenticated, user, logout } = usePrivy();
   const [joined, setJoined] = useState<boolean>(false);
   
-  // Game State
   const [players, setPlayers] = useState<Record<string, Player>>({});
   const [highscores, setHighscores] = useState<Record<string, { clicks: number, coins: number, shards: number }>>({}); 
   const [bgColor, setBgColor] = useState<string>("#5D4037");
@@ -46,25 +44,21 @@ export default function Home() {
   const [ripples, setRipples] = useState<Ripple[]>([]);
   const [floaters, setFloaters] = useState<FloatingText[]>([]);
   
-  // Coin & Mining
   const [activeCoin, setActiveCoin] = useState<Coin | null>(null);
   const [showCave, setShowCave] = useState(false);
   const [globalShards, setGlobalShards] = useState(100);
 
-  // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMsg, setInputMsg] = useState("");
   const chatBottomRef = useRef<HTMLDivElement>(null); 
   const lastMoveTime = useRef<number>(0);
   
-  // UI
   const [musicPlaying, setMusicPlaying] = useState(false);
   const bgmRef = useRef<HTMLAudioElement | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); 
   
-  // --- DAILY TASKS ---
   const [tasks, setTasks] = useState(() => {
     if (typeof window === 'undefined') return { login: false, click: false, share: false };
     try {
@@ -129,7 +123,6 @@ export default function Home() {
       }
   };
 
-  // --- SOCKET ---
   useEffect(() => {
     socket = io(SERVER_URL);
 
@@ -178,12 +171,25 @@ export default function Home() {
       });
     });
 
-    socket.on('score_update', (data: { id: string, clicks: number, globalClicks: number }) => {
+    // 🏆 UPDATED SCORE HANDLER (Auto-Syncs Background)
+    socket.on('score_update', (data: { id: string, clicks: number, globalClicks: number, bgColor: string }) => {
         setClicks(data.globalClicks); 
+        
+        // 🎨 Auto-Sync Background Color
+        if (data.bgColor) {
+            setBgColor(data.bgColor);
+        }
+
         setPlayers((prev) => {
             if (!prev[data.id]) return prev;
             return { ...prev, [data.id]: { ...prev[data.id], clicks: data.clicks } };
         });
+    });
+
+    socket.on('bg_update', (color: string) => {
+        setBgColor(color);
+        playSound('levelup');
+        confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#FFD54F', '#81C784', '#FFFFFF', '#4CAF50'] });
     });
 
     socket.on('coin_collected', (data: { id: string, coins: number }) => {
@@ -337,7 +343,7 @@ export default function Home() {
         /* DESKTOP DEFAULT STYLES FOR MINING */
         .mining-container {
             position: absolute;
-            top: 370px;
+            top: 160px;
             left: 20px;
             z-index: 25;
             background: rgba(255,255,255,0.9);
@@ -424,7 +430,7 @@ export default function Home() {
         onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(!mobileMenuOpen); }}
         style={{ position: 'absolute', top: 20, left: 20, zIndex: 110, background: '#FFF', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)', cursor: 'pointer' }}
       >
-        {mobileMenuOpen ? '✕' : '🥑'}
+        {mobileMenuOpen ? '✕' : '📊'}
       </button>
 
       {/* TOP RIGHT BUTTONS */}
