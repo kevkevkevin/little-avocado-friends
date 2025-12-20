@@ -59,13 +59,14 @@ interface Player {
 
 let players: Record<string, Player> = {};
 let globalClicks = 0;
-const BACKGROUND_COLORS = ["#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548"];
+
+// 🎨 BACKGROUND COLORS (Restored!)
+const BACKGROUND_COLORS = ["#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548", "#2E7D32", "#1B5E20", "#BF360C"];
 
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('join_game', (address: string) => {
-    // 1. Create Player
     players[socket.id] = {
       id: socket.id,
       x: Math.random() * 80 + 10,
@@ -78,14 +79,12 @@ io.on('connection', (socket) => {
       shards: db.highscores[address]?.shards || 0
     };
 
-    // 2. Sync Highscores
     if (!db.highscores[address]) {
         db.highscores[address] = { clicks: 0, coins: 0, shards: 0 };
     } else {
         players[socket.id].clicks = db.highscores[address].clicks;
     }
 
-    // 3. Send Init Data
     socket.emit('init_state', { 
         players, 
         backgroundColor: BACKGROUND_COLORS[0], 
@@ -96,7 +95,7 @@ io.on('connection', (socket) => {
     io.emit('player_joined', players[socket.id]);
   });
 
-  // --- 💬 CHAT LOGIC (RESTORED) ---
+  // --- 💬 CHAT LOGIC ---
   socket.on('send_message', (msg: string) => {
     const player = players[socket.id];
     if (player) {
@@ -148,6 +147,13 @@ io.on('connection', (socket) => {
       const addr = players[socket.id].solanaAddress;
       if(db.highscores[addr]) db.highscores[addr].clicks++;
       saveDB();
+
+      // 🎨 BACKGROUND CHANGE LOGIC (RESTORED)
+      // Every 50 clicks, change the background color for everyone
+      if (globalClicks % 50 === 0) {
+          const randomColor = BACKGROUND_COLORS[Math.floor(Math.random() * BACKGROUND_COLORS.length)];
+          io.emit('bg_update', randomColor);
+      }
 
       io.emit('score_update', { 
           id: socket.id, 
