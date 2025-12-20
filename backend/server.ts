@@ -8,22 +8,39 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// --- FIX: STRICT CORS SETUP ---
+// This explicitly allows your Vercel app to connect
+const allowedOrigins = [
+  "https://littleavocadofriends.vercel.app", 
+  "http://localhost:3000"
+];
+
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-// --- 🍃 MONGODB SETUP ---
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/avocado";
+// --- 🍃 MONGODB SETUP (With Better Error Logging) ---
+const MONGO_URI = process.env.MONGO_URI || "";
+
+if (!MONGO_URI) {
+    console.error("❌ FATAL ERROR: MONGO_URI is missing in Environment Variables!");
+}
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log("✅ Connected to MongoDB!"))
-  .catch(err => console.error("❌ MongoDB Error:", err));
+  .catch(err => console.error("❌ MongoDB Connection Error:", err));
 
 // 1. Define Schemas
 const UserSchema = new mongoose.Schema({
@@ -71,7 +88,7 @@ async function loadGameState() {
         globalClicks = state.totalClicks;
         console.log(`💎 Loaded State: ${weeklyShards} Shards left, ${globalClicks} Total Clicks`);
     } catch (e) {
-        console.log("⚠️ DB Load Error (might be connecting...)", e);
+        console.log("⚠️ DB Load Error (Attempting to continue...)", e);
     }
 }
 loadGameState();
@@ -80,40 +97,42 @@ io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('join_game', async (address: string) => {
-    // Find or Create User in DB
-    let user = await User.findOne({ address });
-    if (!user) {
-        user = await User.create({ address, clicks: 0, coins: 0, shards: 0 });
+    try {
+        let user = await User.findOne({ address });
+        if (!user) {
+            user = await User.create({ address, clicks: 0, coins: 0, shards: 0 });
+        }
+
+        players[socket.id] = {
+          id: socket.id,
+          x: Math.random() * 80 + 10,
+          y: Math.random() * 80 + 10,
+          solanaAddress: address,
+          color: `#${Math.floor(Math.random()*16777215).toString(16)}`,
+          size: 30,
+          clicks: user.clicks,
+          coins: user.coins,
+          shards: user.shards
+        };
+
+        const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
+        const highscores: Record<string, any> = {};
+        allUsers.forEach(u => {
+            highscores[u.address] = { clicks: u.clicks, coins: u.coins, shards: u.shards };
+        });
+
+        socket.emit('init_state', { 
+            players, 
+            backgroundColor: BACKGROUND_COLORS[0], 
+            globalClicks,
+            shards: weeklyShards
+        });
+        
+        io.emit('leaderboard_update', highscores);
+        io.emit('player_joined', players[socket.id]);
+    } catch (e) {
+        console.error("Error joining game:", e);
     }
-
-    players[socket.id] = {
-      id: socket.id,
-      x: Math.random() * 80 + 10,
-      y: Math.random() * 80 + 10,
-      solanaAddress: address,
-      color: `#${Math.floor(Math.random()*16777215).toString(16)}`,
-      size: 30,
-      clicks: user.clicks,
-      coins: user.coins,
-      shards: user.shards
-    };
-
-    // Get current highscores
-    const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
-    const highscores: Record<string, any> = {};
-    allUsers.forEach(u => {
-        highscores[u.address] = { clicks: u.clicks, coins: u.coins, shards: u.shards };
-    });
-
-    socket.emit('init_state', { 
-        players, 
-        backgroundColor: BACKGROUND_COLORS[0], 
-        globalClicks,
-        shards: weeklyShards
-    });
-    
-    io.emit('leaderboard_update', highscores);
-    io.emit('player_joined', players[socket.id]);
   });
 
   socket.on('send_message', (msg: string) => {
@@ -134,7 +153,6 @@ io.on('connection', (socket) => {
           weeklyShards--;
           if (players[socket.id]) {
               players[socket.id].shards++;
-              // Save immediately
               await User.updateOne({ address: players[socket.id].solanaAddress }, { $inc: { shards: 1 } });
               await GameState.updateOne({ id: 'global' }, { weeklyShards: weeklyShards });
               
@@ -174,21 +192,28 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', async () => {
     if (players[socket.id]) {
-        // Save user stats on disconnect
-        await User.updateOne(
-            { address: players[socket.id].solanaAddress }, 
-            { clicks: players[socket.id].clicks }
-        );
+        try {
+            await User.updateOne(
+                { address: players[socket.id].solanaAddress }, 
+                { clicks: players[socket.id].clicks }
+            );
+        } catch(e) { console.error("Save error:", e); }
         delete players[socket.id];
         io.emit('player_left', socket.id);
     }
   });
 });
 
-// Periodic Global Save
 setInterval(async () => {
-    await GameState.updateOne({ id: 'global' }, { totalClicks: globalClicks });
+    try {
+        await GameState.updateOne({ id: 'global' }, { totalClicks: globalClicks });
+    } catch(e) { console.error("Global save error:", e); }
 }, 60000);
+
+// Basic Route to check if server is alive
+app.get('/', (req, res) => {
+    res.send('🥑 Avocado Server is RUNNING!');
+});
 
 const PORT = process.env.PORT || 3001; 
 server.listen(PORT, () => {
