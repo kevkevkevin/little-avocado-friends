@@ -15,8 +15,9 @@ interface Player {
   size: number;
   clicks: number;
   coins: number;
+  shards: number;
 }
-interface InitState { players: Record<string, Player>; backgroundColor: string; globalClicks: number; }
+interface InitState { players: Record<string, Player>; backgroundColor: string; globalClicks: number; shards: number; }
 interface Ripple { id: number; x: number; y: number; }
 interface FloatingText { id: number; x: number; y: number; text: string; }
 interface ChatMessage { id: string; text: string; sender: string; color: string; timestamp: number; }
@@ -39,32 +40,34 @@ export default function Home() {
   
   // Game State
   const [players, setPlayers] = useState<Record<string, Player>>({});
-  const [highscores, setHighscores] = useState<Record<string, { clicks: number, coins: number }>>({}); 
+  const [highscores, setHighscores] = useState<Record<string, { clicks: number, coins: number, shards: number }>>({}); 
   const [bgColor, setBgColor] = useState<string>("#5D4037");
   const [clicks, setClicks] = useState<number>(0);
   const [ripples, setRipples] = useState<Ripple[]>([]);
   const [floaters, setFloaters] = useState<FloatingText[]>([]);
   
-  // Coin State
+  // Coin & Mining
   const [activeCoin, setActiveCoin] = useState<Coin | null>(null);
+  const [showCave, setShowCave] = useState(false);
+  const [globalShards, setGlobalShards] = useState(100);
 
-  // Chat State
+  // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMsg, setInputMsg] = useState("");
   const chatBottomRef = useRef<HTMLDivElement>(null); 
   const lastMoveTime = useRef<number>(0);
   
-  // UI State
+  // UI
   const [musicPlaying, setMusicPlaying] = useState(false);
   const bgmRef = useRef<HTMLAudioElement | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false); 
   
-  // --- DAILY TASKS (Lazy Init - Fixes Vercel Error) ---
+  // --- DAILY TASKS ---
   const [tasks, setTasks] = useState(() => {
     if (typeof window === 'undefined') return { login: false, click: false, share: false };
     try {
-        // Check date first
         const today = new Date().toDateString();
         const savedDate = localStorage.getItem('avocado_last_login');
         if (savedDate !== today) {
@@ -115,15 +118,23 @@ export default function Home() {
     window.open("https://twitter.com/intent/tweet?text=Growing%20my%20Avocado!%20%F0%9F%A5%91", "_blank");
   };
 
-  // --- MAIN SOCKET CONNECTION ---
+  const handleMine = (e: React.MouseEvent) => {
+      e.stopPropagation(); 
+      if (globalShards > 0) {
+          socket?.emit('mine_shard');
+          playSound('click');
+          const btn = e.target as HTMLElement;
+          btn.style.transform = "scale(0.9)";
+          setTimeout(() => btn.style.transform = "scale(1)", 100);
+      }
+  };
+
+  // --- SOCKET ---
   useEffect(() => {
     socket = io(SERVER_URL);
 
-    // FIX: Auto-Rejoin logic if server restarts
     socket.on('connect', () => {
-        console.log("🔌 Connected to server ID:", socket?.id);
         if (user?.wallet?.address) {
-            console.log("🔄 Auto-joining game as:", user.wallet.address);
             socket?.emit('join_game', user.wallet.address);
             setJoined(true);
         }
@@ -133,6 +144,27 @@ export default function Home() {
       setPlayers(data.players);
       setBgColor(data.backgroundColor);
       setClicks(data.globalClicks);
+      setGlobalShards(data.shards);
+    });
+
+    socket.on('mining_update', (newCount: number) => {
+        setGlobalShards(newCount);
+        if (newCount === 0) confetti({ colors: ['#00E5FF', '#FFFFFF'] });
+    });
+
+    socket.on('mining_empty', () => {
+        alert("💎 The Crystal is depleted! Come back next week.");
+    });
+
+    socket.on('shard_collected', (data: { id: string, shards: number }) => {
+        if (data.id === socket?.id) {
+            playSound('coin'); 
+            confetti({ colors: ['#00E5FF'], particleCount: 20 });
+        }
+        setPlayers((prev) => {
+            if (!prev[data.id]) return prev;
+            return { ...prev, [data.id]: { ...prev[data.id], shards: data.shards } };
+        });
     });
 
     socket.on('player_joined', (player: Player) => {
@@ -154,16 +186,6 @@ export default function Home() {
         });
     });
 
-    // COIN LOGIC
-    socket.on('coin_spawned', (coin: Coin) => {
-        setActiveCoin(coin);
-        playSound('chat'); 
-    });
-
-    socket.on('coin_vanished', () => {
-        setActiveCoin(null);
-    });
-
     socket.on('coin_collected', (data: { id: string, coins: number }) => {
         if (data.id === socket?.id) {
             playSound('coin');
@@ -175,27 +197,9 @@ export default function Home() {
         });
     });
 
-    socket.on('leaderboard_update', (data: Record<string, { clicks: number, coins: number }>) => { setHighscores(data); });
-    
-    socket.on('player_grew', (data: { id: string, size: number }) => {
-        setPlayers((prev) => {
-            if (!prev[data.id]) return prev;
-            return { ...prev, [data.id]: { ...prev[data.id], size: data.size } };
-        });
-    });
-    
-    socket.on('player_left', (id: string) => {
-      setPlayers((prev) => { const copy = { ...prev }; delete copy[id]; return copy; });
-    });
-    
-    socket.on('bg_update', (color: string) => {
-        setBgColor(color);
-        playSound('levelup');
-        confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#FFD54F', '#81C784', '#FFFFFF', '#4CAF50'] });
-    });
+    socket.on('leaderboard_update', (data: Record<string, { clicks: number, coins: number, shards: number }>) => { setHighscores(data); });
     
     socket.on('new_message', (msg: ChatMessage) => {
-        console.log("📩 Chat received:", msg);
         setMessages((prev) => [...prev.slice(-49), msg]); 
         playSound('chat');
     });
@@ -227,7 +231,6 @@ export default function Home() {
   const handleJoin = () => {
     const address = user?.wallet?.address;
     if (address && socket) {
-      console.log("🟢 Manual Join Triggered");
       socket.emit('join_game', address);
       setJoined(true);
       playSound('chat');
@@ -241,8 +244,6 @@ export default function Home() {
       if (now - lastMoveTime.current > 30) {
         const xPercent = (x / window.innerWidth) * 100;
         const yPercent = (y / window.innerHeight) * 100;
-        
-        // --- FIX: SAFE SOCKET ACCESS ---
         const sockId = socket?.id;
         if (sockId) {
             setPlayers((prev) => {
@@ -261,7 +262,7 @@ export default function Home() {
   const handleClick = (e: React.MouseEvent | React.TouchEvent) => {
     if (!joined || !socket) return;
     const target = e.target as HTMLElement;
-    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn'))) return;
+    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard'))) return;
 
     if (dailyCount >= MAX_DAILY) return; 
 
@@ -291,16 +292,8 @@ export default function Home() {
 
   const sendChat = (e?: React.FormEvent) => {
       if (e) e.preventDefault();
-      
-      console.log("📤 Sending Chat:", inputMsg);
-
-      if (inputMsg.trim().length === 0 || !socket) {
-          console.log("❌ Chat failed: Empty or No Socket");
-          return;
-      }
-      
+      if (inputMsg.trim().length === 0 || !socket) return;
       socket.emit('send_message', inputMsg);
-      console.log("✅ Chat sent!");
       setInputMsg(""); 
   };
 
@@ -334,19 +327,105 @@ export default function Home() {
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap');
         .bouncy-btn:active { transform: translateY(4px); box-shadow: 0 1px 0 #388E3C !important; }
-        .music-btn:hover, .task-btn:hover, .leaderboard-btn:hover { transform: scale(1.1); }
+        .music-btn:hover, .task-btn:hover, .leaderboard-btn:hover, .mining-btn:hover, .mobile-menu-btn:hover { transform: scale(1.1); }
+        .mining-btn { transition: transform 0.2s; }
+        
+        .chat-box { width: 320px; height: 220px; left: 20px; bottom: 20px; }
+        .scoreboard { top: 20px; left: 20px; }
+        .mobile-menu-btn { display: none; }
+
+        /* DESKTOP DEFAULT STYLES FOR MINING */
+        .mining-container {
+            position: absolute;
+            top: 370px;
+            left: 20px;
+            z-index: 25;
+            background: rgba(255,255,255,0.9);
+            padding: 10px 15px;
+            border-radius: 20px;
+            border: 3px solid #29B6F6;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+        .mining-text-content {
+            display: block;
+        }
+
+        /* RESPONSIVE: TABLET & MOBILE (< 900px) */
+        @media (max-width: 900px) {
+            .mobile-menu-btn { display: flex !important; }
+            
+            .chat-box { 
+                width: 250px !important; 
+                height: 150px !important; 
+                left: 10px !important; 
+                bottom: 10px !important; 
+                font-size: 12px; 
+            }
+            
+            /* Hide Scoreboard unless toggled */
+            .scoreboard { 
+                display: ${mobileMenuOpen ? 'flex' : 'none'} !important;
+                position: fixed !important;
+                top: 50% !important;
+                left: 50% !important;
+                transform: translate(-50%, -50%) scale(1.1) !important;
+                z-index: 100;
+            }
+            
+            .mobile-backdrop {
+                display: ${mobileMenuOpen ? 'block' : 'none'};
+                position: fixed;
+                top: 0; left: 0;
+                width: 100vw; height: 100vh;
+                background: rgba(0,0,0,0.6);
+                z-index: 90;
+            }
+
+            /* TRANSFORM MINING BUTTON TO CIRCLE ICON */
+            .mining-container {
+                /* Move to toggle position if menu open, else stay at top left but lower */
+                top: ${mobileMenuOpen ? '50%' : '100px'} !important; 
+                left: ${mobileMenuOpen ? '50%' : '20px'} !important;
+                transform: ${mobileMenuOpen ? 'translate(-50%, 180px)' : 'none'} !important;
+                z-index: ${mobileMenuOpen ? 120 : 25} !important;
+                
+                /* Circle Shape */
+                width: 50px !important;
+                height: 50px !important;
+                border-radius: 50% !important;
+                padding: 0 !important;
+                justify-content: center !important;
+                background: #E0F7FA !important; /* Crystal Blue */
+                border: 2px solid #00E5FF !important;
+            }
+            
+            /* Hide text on mobile */
+            .mining-text-content {
+                display: none !important;
+            }
+        }
+        
         @keyframes rippleEffect { 0% { width: 0px; height: 0px; opacity: 1; } 100% { width: 120px; height: 120px; opacity: 0; } }
         @keyframes floatUp { 0% { transform: translateY(0px); opacity: 1; } 100% { transform: translateY(-50px); opacity: 0; } }
         @keyframes float { 0% { transform: translateY(0px) translateX(-50%) scale(1, 1); } 50% { transform: translateY(-10px) translateX(-50%) scale(1.1, 0.9); } 100% { transform: translateY(0px) translateX(-50%) scale(1, 1); } }
         @keyframes spin { 0% { transform: translate(-50%, -50%) rotateY(0deg); } 100% { transform: translate(-50%, -50%) rotateY(360deg); } }
-        
-        .chat-box { width: 320px; height: 220px; left: 20px; bottom: 20px; }
-        .scoreboard { top: 20px; left: 20px; }
-        @media (max-width: 600px) {
-            .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; }
-            .scoreboard { top: 10px !important; left: 10px !important; transform: scale(0.85); transform-origin: top left; }
-        }
       `}</style>
+
+      {/* 📱 MOBILE BACKDROP */}
+      <div className="mobile-backdrop" onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(false); }} />
+
+      {/* 📱 MOBILE TOGGLE BUTTON */}
+      <button 
+        className="mobile-menu-btn" 
+        onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(!mobileMenuOpen); }}
+        style={{ position: 'absolute', top: 20, left: 20, zIndex: 110, background: '#FFF', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)', cursor: 'pointer' }}
+      >
+        {mobileMenuOpen ? '✕' : '🥑'}
+      </button>
 
       {/* TOP RIGHT BUTTONS */}
       <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 30, display: 'flex', gap: '10px' }}>
@@ -354,6 +433,42 @@ export default function Home() {
         <button onClick={() => setShowLeaderboard(!showLeaderboard)} className="leaderboard-btn" style={{ background: '#81D4FA', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏆</button>
         <button onClick={toggleMusic} className="music-btn" style={{ background: 'white', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{musicPlaying ? '🎵' : '🔇'}</button>
       </div>
+
+      {/* 💎 MINING BUTTON (RESPONSIVE) */}
+      <div 
+        className="mining-btn mining-container" 
+        onClick={(e) => { e.stopPropagation(); setShowCave(true); }}
+      >
+          <span style={{ fontSize: '24px' }}>⛏️</span>
+          <div className="mining-text-content">
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#5D4037', textTransform: 'uppercase' }}>Crystal Cave</div>
+              <div style={{ fontSize: '10px', color: '#0277BD' }}>{globalShards > 0 ? "Mining Active" : "Depleted"}</div>
+          </div>
+      </div>
+
+      {/* 💎 CAVE MODAL */}
+      {showCave && (
+          <div className="cave-modal" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+              <button onClick={(e) => { e.stopPropagation(); setShowCave(false); }} style={{ position: 'absolute', top: 30, right: 30, background: 'transparent', border: 'none', fontSize: '40px', color: 'white', cursor: 'pointer' }}>✕</button>
+              
+              <h1 style={{ fontSize: '3rem', marginBottom: '20px', textShadow: '0 0 10px #00E5FF' }}>Crystal Cave</h1>
+              
+              <div style={{ fontSize: '1.5rem', marginBottom: '40px' }}>
+                  Weekly Shards Remaining: <span style={{ color: '#00E5FF', fontWeight: 'bold' }}>{globalShards}</span> / 100
+              </div>
+
+              {globalShards > 0 ? (
+                  <div onClick={handleMine} style={{ fontSize: '150px', cursor: 'pointer', transition: 'transform 0.1s', filter: 'drop-shadow(0 0 20px #00E5FF)' }}>💎</div>
+              ) : (
+                  <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '80px', marginBottom: '20px' }}>🌑</div>
+                      <p style={{ fontSize: '1.2rem', color: '#AAA' }}>The vein has collapsed.<br/>Come back next week!</p>
+                  </div>
+              )}
+              
+              <p style={{ marginTop: '40px', fontSize: '0.9rem', color: '#888' }}>Tap the crystal to mine shards!</p>
+          </div>
+      )}
 
       {showTasks && (
           <div style={{ position: 'absolute', top: 80, right: 20, width: '250px', background: 'white', padding: '15px', borderRadius: '15px', boxShadow: '0 8px 30px rgba(0,0,0,0.2)', zIndex: 40, border: '4px solid #FFD54F' }}>
@@ -401,7 +516,13 @@ export default function Home() {
                 {/* COIN DISPLAY */}
                 <div style={{ marginTop: '10px', background: '#FFF', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <span style={{ fontSize: '18px' }}>🪙</span>
-                    <span style={{ fontWeight: 'bold', color: '#FFA000' }}>Coins Collected: {myPlayer.coins}</span>
+                    <span style={{ fontWeight: 'bold', color: '#FFA000' }}>Coins: {myPlayer.coins}</span>
+                </div>
+
+                {/* 💎 SHARD DISPLAY */}
+                <div style={{ marginTop: '5px', background: '#E0F7FA', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #00E5FF' }}>
+                    <span style={{ fontSize: '18px' }}>💎</span>
+                    <span style={{ fontWeight: 'bold', color: '#006064' }}>Shards: {myPlayer.shards}</span>
                 </div>
             </div>
         )}
