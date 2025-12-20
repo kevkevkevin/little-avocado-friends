@@ -20,7 +20,7 @@ const io = new Server(server, {
 const DB_FILE = path.join(__dirname, 'database.json');
 
 interface Database {
-  highscores: Record<string, { clicks: number, coins: number, shards: number }>; // 💎 Added shards
+  highscores: Record<string, { clicks: number, coins: number, shards: number }>;
   weeklyShards: number;
   lastReset: string;
 }
@@ -54,7 +54,7 @@ interface Player {
   size: number;
   clicks: number;
   coins: number;
-  shards: number; // 💎 Added shards
+  shards: number;
 }
 
 let players: Record<string, Player> = {};
@@ -75,7 +75,7 @@ io.on('connection', (socket) => {
       size: 30,
       clicks: 0,
       coins: db.highscores[address]?.coins || 0,
-      shards: db.highscores[address]?.shards || 0 // 💎 Load shards
+      shards: db.highscores[address]?.shards || 0
     };
 
     // 2. Sync Highscores
@@ -96,21 +96,32 @@ io.on('connection', (socket) => {
     io.emit('player_joined', players[socket.id]);
   });
 
+  // --- 💬 CHAT LOGIC (RESTORED) ---
+  socket.on('send_message', (msg: string) => {
+    const player = players[socket.id];
+    if (player) {
+      const chatMsg = {
+        id: Date.now().toString(),
+        text: msg,
+        sender: player.solanaAddress,
+        color: player.color,
+        timestamp: Date.now()
+      };
+      io.emit('new_message', chatMsg);
+    }
+  });
+
   // --- 💎 MINING LOGIC ---
   socket.on('mine_shard', () => {
       if (db.weeklyShards > 0) {
           db.weeklyShards--;
           
-          // Update Player Stats
           if (players[socket.id]) {
               players[socket.id].shards = (players[socket.id].shards || 0) + 1;
-              
               const addr = players[socket.id].solanaAddress;
               if (db.highscores[addr]) {
                   db.highscores[addr].shards = (db.highscores[addr].shards || 0) + 1;
               }
-              
-              // 💎 Emit Personal Update
               io.emit('shard_collected', { id: socket.id, shards: players[socket.id].shards });
           }
 
@@ -147,9 +158,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Coin Collection Logic
-  socket.on('coin_spawned', (coin) => io.emit('coin_spawned', coin)); // Simplified for demo
-  socket.on('coin_collected', () => { /* Add coin logic if separate from generic handler */ });
+  socket.on('coin_spawned', (coin) => io.emit('coin_spawned', coin));
 
   socket.on('disconnect', () => {
     delete players[socket.id];
