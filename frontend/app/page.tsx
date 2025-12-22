@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
@@ -59,8 +60,11 @@ export default function Home() {
   const [trashItems, setTrashItems] = useState<Trash[]>([]); 
   const [damageFlash, setDamageFlash] = useState(false); 
   
+  // 🆕 WARNING POPUP STATE
   const [showWarning, setShowWarning] = useState(false);
-  const [hasSeenWarning, setHasSeenWarning] = useState(false);
+  
+  // We use a Ref to track if we've seen it, so we can check it inside socket listeners without dependency issues
+  const hasSeenWarningRef = useRef(false);
 
   const [showCave, setShowCave] = useState(false);
   const [globalShards, setGlobalShards] = useState(100);
@@ -188,6 +192,12 @@ export default function Home() {
       setBgColor(data.backgroundColor);
       setClicks(data.globalClicks);
       setGlobalShards(data.shards);
+      
+      // Check immediately on join
+      if (data.globalClicks >= 100 && !hasSeenWarningRef.current) {
+          setShowWarning(true);
+          hasSeenWarningRef.current = true;
+      }
     });
 
     socket.on('trash_sync', (items: Trash[]) => setTrashItems(items));
@@ -267,6 +277,12 @@ export default function Home() {
             if (!prev[data.id]) return prev;
             return { ...prev, [data.id]: { ...prev[data.id], clicks: data.clicks } };
         });
+
+        // 🆕 CHECK WARNING HERE INSTEAD OF useEffect
+        if (data.globalClicks >= 100 && !hasSeenWarningRef.current) {
+            setShowWarning(true);
+            hasSeenWarningRef.current = true;
+        }
     });
 
     socket.on('bg_update', (color: string) => {
@@ -300,12 +316,7 @@ export default function Home() {
     return () => { if (socket) socket.disconnect(); };
   }, [user]); 
 
-  useEffect(() => {
-      if (clicks >= 100 && !hasSeenWarning) {
-          setShowWarning(true);
-          setHasSeenWarning(true);
-      }
-  }, [clicks, hasSeenWarning]);
+  // (Removed the failing useEffect entirely - Logic moved to socket listeners)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -391,9 +402,8 @@ export default function Home() {
     performClick(clientX, clientY);
   };
 
-  // 📱 JOYSTICK CLICK
   const handleJoystickClick = (e: React.TouchEvent) => {
-      e.stopPropagation(); // Don't trigger background click
+      e.stopPropagation(); 
       const touch = e.touches[0];
       performClick(touch.clientX, touch.clientY);
   };
@@ -462,13 +472,11 @@ export default function Home() {
         .sf8 { left: 80%; animation-duration: 13s; animation-delay: 0s; }
         .sf9 { left: 90%; animation-duration: 10s; animation-delay: 4s; }
         .sf10 { left: 95%; animation-duration: 16s; animation-delay: 1s; }
-        .mining-container { position: absolute; top: 450px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; }
+        .mining-container { position: absolute; top: 465px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; }
         .mining-text-content { display: block; }
         .music-controls { display: flex; align-items: center; gap: 8px; background: white; padding: 5px 10px; border-radius: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .control-btn { background: transparent; border: none; font-size: 18px; cursor: pointer; padding: 5px; border-radius: 50%; transition: background 0.2s; }
         .control-btn:hover { background: #EEE; }
-        
-        /* 🕹️ JOYSTICK STYLE */
         .mobile-joystick {
             position: fixed;
             bottom: 30px;
@@ -479,7 +487,7 @@ export default function Home() {
             border: 4px solid rgba(255, 255, 255, 0.8);
             border-radius: 50%;
             z-index: 150;
-            display: none; /* Hidden by default */
+            display: none;
             align-items: center;
             justify-content: center;
             font-size: 30px;
@@ -487,11 +495,7 @@ export default function Home() {
             touch-action: manipulation;
             box-shadow: 0 0 15px rgba(0,0,0,0.2);
         }
-        .mobile-joystick:active {
-            background: rgba(255, 255, 255, 0.8);
-            transform: scale(0.95);
-        }
-
+        .mobile-joystick:active { background: rgba(255, 255, 255, 0.8); transform: scale(0.95); }
         @keyframes heartbeat { 0% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.1); } 100% { transform: translate(-50%, -50%) scale(1); } }
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
         @media (max-width: 900px) {
@@ -501,7 +505,6 @@ export default function Home() {
             .mobile-backdrop { display: ${mobileMenuOpen ? 'block' : 'none'}; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 90; }
             .mining-container { top: ${mobileMenuOpen ? '50%' : '100px'} !important; left: ${mobileMenuOpen ? '50%' : '20px'} !important; transform: ${mobileMenuOpen ? 'translate(-50%, 180px)' : 'none'} !important; z-index: ${mobileMenuOpen ? 120 : 25} !important; width: 50px !important; height: 50px !important; border-radius: 50% !important; padding: 0 !important; justifyContent: center !important; background: #E0F7FA !important; border: 2px solid #00E5FF !important; }
             .mining-text-content { display: none !important; }
-            /* Show Joystick ONLY on mobile */
             .mobile-joystick { display: flex !important; }
         }
         @keyframes rippleEffect { 0% { width: 0px; height: 0px; opacity: 1; } 100% { width: 120px; height: 120px; opacity: 0; } }
@@ -510,11 +513,9 @@ export default function Home() {
         @keyframes spin { 0% { transform: translate(-50%, -50%) rotateY(0deg); } 100% { transform: translate(-50%, -50%) rotateY(360deg); } }
       `}</style>
 
-      {/* 🕹️ MOBILE JOYSTICK / ACTION BUTTON */}
-      <div className="mobile-joystick" onTouchStart={handleJoystickClick}>
-          🥑
-      </div>
+      <div className="mobile-joystick" onTouchStart={handleJoystickClick}>🥑</div>
 
+      {/* 🆕 WARNING POPUP */}
       {showWarning && (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ background: '#D32F2F', padding: '30px', borderRadius: '20px', border: '5px solid #FFF', textAlign: 'center', color: 'white', animation: 'pulse 1s infinite' }}>
