@@ -82,7 +82,7 @@ interface Player {
 let players: Record<string, Player> = {};
 let globalClicks = 0;
 let weeklyShards = 100;
-let currentBgColor = "#5D4037"; // 🎨 State Variable
+let currentBgColor = "#5D4037"; 
 
 const BACKGROUND_COLORS = [
     "#5D4037", "#4E342E", "#3E2723", "#8D6E63", "#795548", 
@@ -105,6 +105,7 @@ async function loadGameState() {
         }
         weeklyShards = state.weeklyShards;
         globalClicks = state.totalClicks;
+        // Load the saved color, or default to brown if missing
         currentBgColor = state.currentBgColor || "#5D4037"; 
         console.log(`💎 Loaded: ${globalClicks} Clicks, Color: ${currentBgColor}`);
     } catch (e) { console.log("⚠️ DB Load Error (Non-fatal)", e); }
@@ -152,7 +153,7 @@ io.on('connection', (socket) => {
 
     socket.emit('your_daily_progress', userDaily);
 
-    // Initial State now includes the correct color
+    // ⚡ Send the current saved BG color immediately
     socket.emit('init_state', { 
         players, 
         backgroundColor: currentBgColor, 
@@ -160,7 +161,6 @@ io.on('connection', (socket) => {
         shards: weeklyShards
     });
     
-    // Send Leaderboard
     if (isDbConnected) {
         try {
             const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
@@ -193,7 +193,6 @@ io.on('connection', (socket) => {
           weeklyShards--;
           if (players[socket.id]) {
               players[socket.id].shards++;
-              
               if (isDbConnected) {
                   await User.updateOne({ address: players[socket.id].solanaAddress }, { $inc: { shards: 1 } }).catch(()=>{});
                   await GameState.updateOne({ id: 'global' }, { weeklyShards: weeklyShards }).catch(()=>{});
@@ -221,32 +220,27 @@ io.on('connection', (socket) => {
           socket.emit('error_limit_reached');
           return; 
       }
-
       p.clicks++;
       p.dailyClicks++;
       globalClicks++;
 
-      // 🎨 CHECK MILESTONES (50, 100, 500, 1000, 2000...)
-      const milestones = [50, 100, 500, 1000];
-      const isMilestone = milestones.includes(globalClicks) || (globalClicks >= 2000 && globalClicks % 1000 === 0);
-
-      if (isMilestone) {
+      // 🎨 CHANGED LOGIC: Update every 50 clicks ALWAYS
+      if (globalClicks % 50 === 0) {
           const randomColor = BACKGROUND_COLORS[Math.floor(Math.random() * BACKGROUND_COLORS.length)];
           currentBgColor = randomColor; 
-          io.emit('bg_update', randomColor); // Event for sound/confetti
+          io.emit('bg_update', randomColor); // Play sound/confetti
           
           if(isDbConnected) {
              await GameState.updateOne({ id: 'global' }, { currentBgColor: randomColor }).catch(()=>{});
           }
       }
 
-      // 🛠️ SELF-HEALING: Send the color in EVERY score update
-      // This forces clients to sync color even if they missed the 'bg_update' event
+      // 🛠️ SYNC: Send color in every update to fix desync issues
       io.emit('score_update', { 
           id: socket.id, 
           clicks: p.clicks, 
           globalClicks,
-          bgColor: currentBgColor // <--- The Fix
+          bgColor: currentBgColor 
       });
 
       if (isDbConnected) {
@@ -263,9 +257,18 @@ io.on('connection', (socket) => {
   socket.on('coin_spawned', (coin) => io.emit('coin_spawned', coin));
 
   socket.on('disconnect', () => {
-    if (players[socket.id]) {
+    const player = players[socket.id];
+    if (player) {
+        // Delete immediately to prevent "Ghost Avocado"
         delete players[socket.id];
         io.emit('player_left', socket.id);
+
+        if (isDbConnected) {
+            User.updateOne(
+                { address: player.solanaAddress }, 
+                { clicks: player.clicks }
+            ).catch(err => console.log("Save on disconnect failed", err));
+        }
     }
   });
 });

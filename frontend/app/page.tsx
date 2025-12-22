@@ -343,7 +343,7 @@ export default function Home() {
         /* DESKTOP DEFAULT STYLES FOR MINING */
         .mining-container {
             position: absolute;
-            top: 160px;
+            top: 370px;
             left: 20px;
             z-index: 25;
             background: rgba(255,255,255,0.9);
