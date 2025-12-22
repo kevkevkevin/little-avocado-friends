@@ -48,9 +48,11 @@ if (!MONGO_URI) {
 // 1. Define Schemas
 const UserSchema = new mongoose.Schema({
     address: { type: String, required: true, unique: true },
+    username: { type: String, default: "" },
     clicks: { type: Number, default: 0 },
     coins: { type: Number, default: 0 },
     shards: { type: Number, default: 0 },
+    trashCollected: { type: Number, default: 0 },
     dailyClicks: { type: Number, default: 0 },
     lastDailyDate: { type: String, default: "" }
 });
@@ -71,15 +73,24 @@ interface Player {
   x: number;
   y: number;
   solanaAddress: string;
+  username: string;
   color: string;
   size: number;
   clicks: number;
   coins: number;
   shards: number;
+  trashCollected: number;
   dailyClicks: number;
 }
 
+interface Trash {
+    id: string;
+    x: number;
+    y: number;
+}
+
 let players: Record<string, Player> = {};
+let trashItems: Trash[] = []; 
 let globalClicks = 0;
 let weeklyShards = 100;
 let currentBgColor = "#5D4037"; 
@@ -99,14 +110,14 @@ async function loadGameState() {
             state = await GameState.create({ 
                 id: 'global', 
                 weeklyShards: 100, 
-                totalClicks: 0, 
+                totalClicks: 0, // Fresh start logic
                 currentBgColor: "#5D4037" 
             });
         }
         weeklyShards = state.weeklyShards;
         globalClicks = state.totalClicks;
         currentBgColor = state.currentBgColor || "#5D4037"; 
-        console.log(`💎 Loaded: ${globalClicks} Clicks, Color: ${currentBgColor}`);
+        console.log(`💎 Loaded: ${globalClicks} Clicks`);
     } catch (e) { console.log("⚠️ DB Load Error (Non-fatal)", e); }
 }
 
@@ -114,7 +125,8 @@ io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('join_game', async (address: string) => {
-    let userClicks = 0, userCoins = 0, userShards = 0, userDaily = 0;
+    let userClicks = 0, userCoins = 0, userShards = 0, userDaily = 0, userTrash = 0;
+    let userDisplayName = "";
 
     if (isDbConnected) {
         try {
@@ -122,7 +134,7 @@ io.on('connection', (socket) => {
             const today = new Date().toDateString();
 
             if (!user) {
-                user = await User.create({ address, clicks: 0, coins: 0, shards: 0, dailyClicks: 0, lastDailyDate: today });
+                user = await User.create({ address, username: "", clicks: 0, coins: 0, shards: 0, trashCollected: 0, dailyClicks: 0, lastDailyDate: today });
             } else {
                 if (user.lastDailyDate !== today) {
                     user.dailyClicks = 0;
@@ -133,7 +145,9 @@ io.on('connection', (socket) => {
             userClicks = user.clicks;
             userCoins = user.coins;
             userShards = user.shards;
+            userTrash = user.trashCollected || 0;
             userDaily = user.dailyClicks;
+            userDisplayName = user.username || "";
         } catch (e) { console.error("Error loading user:", e); }
     }
 
@@ -142,11 +156,13 @@ io.on('connection', (socket) => {
       x: Math.random() * 80 + 10,
       y: Math.random() * 80 + 10,
       solanaAddress: address,
+      username: userDisplayName, 
       color: `#${Math.floor(Math.random()*16777215).toString(16)}`,
-      size: 30, // Default size
+      size: 30,
       clicks: userClicks,
       coins: userCoins,
       shards: userShards,
+      trashCollected: userTrash,
       dailyClicks: userDaily
     };
 
@@ -159,12 +175,20 @@ io.on('connection', (socket) => {
         shards: weeklyShards
     });
     
+    socket.emit('trash_sync', trashItems);
+
     if (isDbConnected) {
         try {
             const allUsers = await User.find().sort({ clicks: -1 }).limit(10);
             const highscores: Record<string, any> = {};
             allUsers.forEach(u => {
-                highscores[u.address] = { clicks: u.clicks, coins: u.coins, shards: u.shards };
+                highscores[u.address] = { 
+                    clicks: u.clicks, 
+                    coins: u.coins, 
+                    shards: u.shards, 
+                    trashCollected: u.trashCollected || 0,
+                    username: u.username 
+                };
             });
             socket.emit('leaderboard_update', highscores);
         } catch(e) {}
@@ -173,33 +197,60 @@ io.on('connection', (socket) => {
     io.emit('player_joined', players[socket.id]);
   });
 
+  socket.on('set_username', async (name: string) => {
+      if (!name) return;
+      const cleanName = name.trim().slice(0, 11); 
+      if (players[socket.id]) {
+          players[socket.id].username = cleanName;
+          io.emit('player_updated', { id: socket.id, username: cleanName });
+          if (isDbConnected) {
+              await User.updateOne({ address: players[socket.id].solanaAddress }, { username: cleanName });
+          }
+      }
+  });
+
   socket.on('send_message', (msg: string) => {
     const player = players[socket.id];
     if (player) {
       io.emit('new_message', {
         id: Date.now().toString(),
         text: msg,
-        sender: player.solanaAddress,
+        sender: player.username || player.solanaAddress,
         color: player.color,
         timestamp: Date.now()
       });
     }
   });
 
-  // 🥑 GROW FUNCTION (Restored!)
   socket.on('grow_avocado', () => {
     if (players[socket.id]) {
-        players[socket.id].size = 60; // Grow big
+        players[socket.id].size = 60; 
         io.emit('player_grew', { id: socket.id, size: 60 });
-
-        // Shrink back after 3 seconds
         setTimeout(() => {
             if (players[socket.id]) {
-                players[socket.id].size = 30; // Back to normal
+                players[socket.id].size = 30;
                 io.emit('player_grew', { id: socket.id, size: 30 });
             }
         }, 3000);
     }
+  });
+
+  socket.on('collect_trash', (trashId: string) => {
+      const index = trashItems.findIndex(t => t.id === trashId);
+      if (index !== -1) {
+          trashItems.splice(index, 1); 
+          if (players[socket.id]) {
+              players[socket.id].trashCollected += 1;
+              if (isDbConnected) {
+                  User.updateOne({ address: players[socket.id].solanaAddress }, { $inc: { trashCollected: 1 } }).catch(()=>{});
+              }
+              io.emit('trash_collected', { 
+                  trashId, 
+                  collectorId: socket.id, 
+                  newCount: players[socket.id].trashCollected 
+              });
+          }
+      }
   });
 
   socket.on('mine_shard', async () => {
@@ -272,7 +323,6 @@ io.on('connection', (socket) => {
     if (player) {
         delete players[socket.id];
         io.emit('player_left', socket.id);
-
         if (isDbConnected) {
             User.updateOne(
                 { address: player.solanaAddress }, 
@@ -283,13 +333,46 @@ io.on('connection', (socket) => {
   });
 });
 
+// --- ☠️ THE GAME LOOP ---
 setInterval(async () => {
+    // 🆕 RESTRICT SPAWNING: ONLY IF SCORE >= 100
+    if (globalClicks >= 100 && trashItems.length < 10 && Math.random() < 0.1) {
+        const newTrash = {
+            id: Date.now().toString(),
+            x: Math.random() * 80 + 10,
+            y: Math.random() * 80 + 10
+        };
+        trashItems.push(newTrash);
+        io.emit('trash_spawned', newTrash);
+    }
+
+    if (trashItems.length > 0) {
+        const damage = trashItems.length * 1; 
+        globalClicks = Math.max(0, globalClicks - damage);
+        
+        io.emit('score_damage', { globalClicks, damage });
+
+        if (globalClicks <= 0) {
+            console.log("💀 GAME OVER - WIPING DATA");
+            globalClicks = 1000; // Reset to 1000 buffer
+            trashItems = []; 
+            Object.values(players).forEach(p => {
+                p.clicks = 0; p.coins = 0; p.shards = 0; p.trashCollected = 0;
+            });
+            if (isDbConnected) {
+                await User.updateMany({}, { clicks: 0, coins: 0, shards: 0, trashCollected: 0 });
+                await GameState.updateOne({ id: 'global' }, { totalClicks: 1000 });
+            }
+            io.emit('game_over_reset');
+        }
+    }
+
     if (isDbConnected) {
         try {
             await GameState.updateOne({ id: 'global' }, { totalClicks: globalClicks });
-        } catch(e) { console.error("Global save error:", e); }
+        } catch(e) {}
     }
-}, 60000);
+}, 1000); 
 
 app.get('/', (req, res) => { res.send('🥑 Avocado Server is RUNNING!'); });
 
