@@ -60,10 +60,7 @@ export default function Home() {
   const [trashItems, setTrashItems] = useState<Trash[]>([]); 
   const [damageFlash, setDamageFlash] = useState(false); 
   
-  // 🆕 WARNING POPUP STATE
   const [showWarning, setShowWarning] = useState(false);
-  
-  // We use a Ref to track if we've seen it, so we can check it inside socket listeners without dependency issues
   const hasSeenWarningRef = useRef(false);
 
   const [showCave, setShowCave] = useState(false);
@@ -84,6 +81,11 @@ export default function Home() {
   
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState("");
+
+  // 🕹️ JOYSTICK STATE
+  const joystickRef = useRef<HTMLDivElement>(null);
+  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 }); // Visual offset of the knob
+  const [isDragging, setIsDragging] = useState(false);
 
   const [tasks, setTasks] = useState(() => {
     if (typeof window === 'undefined') return { login: false, click: false, share: false };
@@ -192,8 +194,6 @@ export default function Home() {
       setBgColor(data.backgroundColor);
       setClicks(data.globalClicks);
       setGlobalShards(data.shards);
-      
-      // Check immediately on join
       if (data.globalClicks >= 100 && !hasSeenWarningRef.current) {
           setShowWarning(true);
           hasSeenWarningRef.current = true;
@@ -202,7 +202,6 @@ export default function Home() {
 
     socket.on('trash_sync', (items: Trash[]) => setTrashItems(items));
     socket.on('trash_spawned', (item: Trash) => setTrashItems(prev => [...prev, item]));
-    
     socket.on('trash_collected', (data: { trashId: string, collectorId: string, newCount: number }) => {
         setTrashItems(prev => prev.filter(t => t.id !== data.trashId));
         setPlayers((prev) => {
@@ -277,8 +276,6 @@ export default function Home() {
             if (!prev[data.id]) return prev;
             return { ...prev, [data.id]: { ...prev[data.id], clicks: data.clicks } };
         });
-
-        // 🆕 CHECK WARNING HERE INSTEAD OF useEffect
         if (data.globalClicks >= 100 && !hasSeenWarningRef.current) {
             setShowWarning(true);
             hasSeenWarningRef.current = true;
@@ -315,8 +312,6 @@ export default function Home() {
 
     return () => { if (socket) socket.disconnect(); };
   }, [user]); 
-
-  // (Removed the failing useEffect entirely - Logic moved to socket listeners)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -364,10 +359,10 @@ export default function Home() {
       }
   }
 
+  // DESKTOP ONLY MOVE
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => { handleInputMove(e.clientX, e.clientY); };
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { handleInputMove(e.touches[0].clientX, e.touches[0].clientY); };
 
-  // CORE LOGIC SEPARATED FOR REUSE
+  // CORE LOGIC FOR POINTS
   const performClick = (x: number, y: number) => {
       if (!joined || !socket) return;
       if (dailyCount >= MAX_DAILY) return; 
@@ -387,25 +382,55 @@ export default function Home() {
       setDailyCount(prev => prev + 1);
   };
 
-  const handleClick = (e: React.MouseEvent | React.TouchEvent) => {
+  // DESKTOP CLICK
+  const handleClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard') || target.closest('.music-controls') || target.closest('.mobile-joystick'))) return;
-
-    let clientX, clientY;
-    if ('touches' in e) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
-    } else {
-        clientX = (e as React.MouseEvent).clientX;
-        clientY = (e as React.MouseEvent).clientY;
-    }
-    performClick(clientX, clientY);
+    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn-internal') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard') || target.closest('.music-controls') || target.closest('.mobile-joystick'))) return;
+    performClick(e.clientX, e.clientY);
   };
 
-  const handleJoystickClick = (e: React.TouchEvent) => {
-      e.stopPropagation(); 
+  // 🕹️ JOYSTICK LOGIC
+  const handleJoystickStart = (e: React.TouchEvent) => {
+      e.stopPropagation();
+      setIsDragging(true);
+      performClick(e.touches[0].clientX, e.touches[0].clientY); // Tap to click initially
+  };
+
+  const handleJoystickMove = (e: React.TouchEvent) => {
+      e.stopPropagation();
+      if (!joystickRef.current) return;
+      
       const touch = e.touches[0];
-      performClick(touch.clientX, touch.clientY);
+      const rect = joystickRef.current.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      
+      // Calculate Delta (Limit to 30px radius)
+      let deltaX = touch.clientX - centerX;
+      let deltaY = touch.clientY - centerY;
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      const maxRadius = 30;
+      
+      if (distance > maxRadius) {
+          const angle = Math.atan2(deltaY, deltaX);
+          deltaX = Math.cos(angle) * maxRadius;
+          deltaY = Math.sin(angle) * maxRadius;
+      }
+      
+      setJoystickPos({ x: deltaX, y: deltaY });
+
+      // MOVE CHARACTER (Relative to center of screen usually, or absolute map)
+      // Since our game uses absolute X/Y (0-100%), we'll map the joystick to the screen.
+      // NOTE: This moves the player based on Joystick Angle relative to screen center.
+      const moveX = 50 + (deltaX / maxRadius) * 45; // 50% is center, move 45% either way
+      const moveY = 50 + (deltaY / maxRadius) * 45;
+      
+      handleInputMove(moveX * (window.innerWidth / 100), moveY * (window.innerHeight / 100));
+  };
+
+  const handleJoystickEnd = () => {
+      setIsDragging(false);
+      setJoystickPos({ x: 0, y: 0 }); // Reset knob to center
   };
 
   const sendChat = (e?: React.FormEvent) => {
@@ -447,7 +472,7 @@ export default function Home() {
 
   return (
     <main 
-      onMouseMove={handleMouseMove} onClick={handleClick} onTouchMove={handleTouchMove} onTouchStart={handleClick}
+      onMouseMove={handleMouseMove} onClick={handleClick}
       style={{ width: '100vw', height: '100vh', backgroundColor: bgColor, position: 'relative', overflow: 'hidden', cursor: dailyCount >= MAX_DAILY ? "not-allowed" : "url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><text y=\"20\" font-size=\"20\">🥑</text></svg>'), auto", transition: 'background-color 1.5s ease', touchAction: 'none', fontFamily: "'Fredoka', sans-serif" }}
     >
       <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'red', opacity: damageFlash ? 0.3 : 0, pointerEvents: 'none', transition: 'opacity 0.1s ease', zIndex: 999 }} />
@@ -472,38 +497,41 @@ export default function Home() {
         .sf8 { left: 80%; animation-duration: 13s; animation-delay: 0s; }
         .sf9 { left: 90%; animation-duration: 10s; animation-delay: 4s; }
         .sf10 { left: 95%; animation-duration: 16s; animation-delay: 1s; }
-        .mining-container { position: absolute; top: 465px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; }
+        .mining-container { position: absolute; top: 160px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; }
         .mining-text-content { display: block; }
         .music-controls { display: flex; align-items: center; gap: 8px; background: white; padding: 5px 10px; border-radius: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .control-btn { background: transparent; border: none; font-size: 18px; cursor: pointer; padding: 5px; border-radius: 50%; transition: background 0.2s; }
         .control-btn:hover { background: #EEE; }
-        .mobile-joystick {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 80px;
-            height: 80px;
-            background: rgba(255, 255, 255, 0.5);
-            border: 4px solid rgba(255, 255, 255, 0.8);
-            border-radius: 50%;
-            z-index: 150;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            font-size: 30px;
-            user-select: none;
-            touch-action: manipulation;
-            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        
+        .mining-btn-internal { 
+            margin-top: 10px; background: #E0F7FA; padding: 8px 12px; border-radius: 12px; border: 2px solid #00E5FF; display: flex; alignItems: center; gap: 10px; cursor: pointer; transition: transform 0.1s;
         }
-        .mobile-joystick:active { background: rgba(255, 255, 255, 0.8); transform: scale(0.95); }
+        .mining-btn-internal:active { transform: scale(0.95); }
+
+        .mobile-joystick {
+            position: fixed; bottom: 30px; right: 30px; width: 100px; height: 100px;
+            background: rgba(255, 255, 255, 0.4); border: 2px solid rgba(255, 255, 255, 0.6);
+            border-radius: 50%; z-index: 150; display: none; align-items: center; justify-content: center;
+            touch-action: none;
+        }
+        .joystick-knob {
+            width: 40px; height: 40px; background: #4CAF50; border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); pointer-events: none;
+            display: flex; align-items: center; justify-content: center; font-size: 20px;
+        }
+
         @keyframes heartbeat { 0% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.1); } 100% { transform: translate(-50%, -50%) scale(1); } }
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        
         @media (max-width: 900px) {
             .mobile-menu-btn { display: flex !important; }
             .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; }
-            .scoreboard { display: ${mobileMenuOpen ? 'flex' : 'none'} !important; position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) scale(1.1) !important; z-index: 100; }
-            .mobile-backdrop { display: ${mobileMenuOpen ? 'block' : 'none'}; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 90; }
-            .mining-container { top: ${mobileMenuOpen ? '50%' : '100px'} !important; left: ${mobileMenuOpen ? '50%' : '20px'} !important; transform: ${mobileMenuOpen ? 'translate(-50%, 180px)' : 'none'} !important; z-index: ${mobileMenuOpen ? 120 : 25} !important; width: 50px !important; height: 50px !important; border-radius: 50% !important; padding: 0 !important; justifyContent: center !important; background: #E0F7FA !important; border: 2px solid #00E5FF !important; }
+            .scoreboard { 
+                display: ${mobileMenuOpen ? 'flex' : 'none'} !important; 
+                position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) scale(1.1) !important; 
+                z-index: 80 !important; /* 🔥 Fix: Increased Z-Index to be clickable */
+            }
+            
             .mining-text-content { display: none !important; }
             .mobile-joystick { display: flex !important; }
         }
@@ -513,9 +541,17 @@ export default function Home() {
         @keyframes spin { 0% { transform: translate(-50%, -50%) rotateY(0deg); } 100% { transform: translate(-50%, -50%) rotateY(360deg); } }
       `}</style>
 
-      <div className="mobile-joystick" onTouchStart={handleJoystickClick}>🥑</div>
+      {/* 🕹️ NEW JOYSTICK IMPLEMENTATION */}
+      <div 
+        className="mobile-joystick" 
+        ref={joystickRef}
+        onTouchStart={handleJoystickStart}
+        onTouchMove={handleJoystickMove}
+        onTouchEnd={handleJoystickEnd}
+      >
+          <div className="joystick-knob" style={{ transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)` }}>🥑</div>
+      </div>
 
-      {/* 🆕 WARNING POPUP */}
       {showWarning && (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ background: '#D32F2F', padding: '30px', borderRadius: '20px', border: '5px solid #FFF', textAlign: 'center', color: 'white', animation: 'pulse 1s infinite' }}>
@@ -554,14 +590,6 @@ export default function Home() {
         </div>
         <button onClick={() => setShowTasks(!showTasks)} className="task-btn" style={{ background: '#FFD54F', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📝</button>
         <button onClick={() => setShowLeaderboard(!showLeaderboard)} className="leaderboard-btn" style={{ background: '#81D4FA', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏆</button>
-      </div>
-
-      <div className="mining-btn mining-container" onClick={(e) => { e.stopPropagation(); setShowCave(true); }}>
-          <span style={{ fontSize: '24px' }}>⛏️</span>
-          <div className="mining-text-content">
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#5D4037', textTransform: 'uppercase' }}>Crystal Cave</div>
-              <div style={{ fontSize: '10px', color: '#0277BD' }}>{globalShards > 0 ? "Mining Active" : "Depleted"}</div>
-          </div>
       </div>
 
       {showCave && (
@@ -622,6 +650,15 @@ export default function Home() {
                 <div style={{ marginTop: '10px', background: '#FFF', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ fontSize: '18px' }}>🪙</span><span style={{ fontWeight: 'bold', color: '#FFA000' }}>Coins: {myPlayer.coins}</span></div>
                 <div style={{ marginTop: '5px', background: '#E0F7FA', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #00E5FF' }}><span style={{ fontSize: '18px' }}>💎</span><span style={{ fontWeight: 'bold', color: '#006064' }}>Shards: {myPlayer.shards}</span></div>
                 <div style={{ marginTop: '5px', background: '#FFEBEE', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #D32F2F' }}><span style={{ fontSize: '18px' }}>☃️</span><span style={{ fontWeight: 'bold', color: '#C62828' }}>Snowmen: {myPlayer.trashCollected}</span></div>
+                
+                {/* 💎 MINING BUTTON MOVED HERE */}
+                <div className="mining-btn-internal" onClick={(e) => { e.stopPropagation(); setShowCave(true); }}>
+                    <span style={{ fontSize: '24px' }}>⛏️</span>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#5D4037', textTransform: 'uppercase' }}>Crystal Cave</div>
+                        <div style={{ fontSize: '10px', color: '#0277BD' }}>{globalShards > 0 ? "Mining Active" : "Depleted"}</div>
+                    </div>
+                </div>
             </div>
         )}
       </div>
