@@ -105,7 +105,6 @@ async function loadGameState() {
         }
         weeklyShards = state.weeklyShards;
         globalClicks = state.totalClicks;
-        // Load the saved color, or default to brown if missing
         currentBgColor = state.currentBgColor || "#5D4037"; 
         console.log(`💎 Loaded: ${globalClicks} Clicks, Color: ${currentBgColor}`);
     } catch (e) { console.log("⚠️ DB Load Error (Non-fatal)", e); }
@@ -144,7 +143,7 @@ io.on('connection', (socket) => {
       y: Math.random() * 80 + 10,
       solanaAddress: address,
       color: `#${Math.floor(Math.random()*16777215).toString(16)}`,
-      size: 30,
+      size: 30, // Default size
       clicks: userClicks,
       coins: userCoins,
       shards: userShards,
@@ -153,7 +152,6 @@ io.on('connection', (socket) => {
 
     socket.emit('your_daily_progress', userDaily);
 
-    // ⚡ Send the current saved BG color immediately
     socket.emit('init_state', { 
         players, 
         backgroundColor: currentBgColor, 
@@ -185,6 +183,22 @@ io.on('connection', (socket) => {
         color: player.color,
         timestamp: Date.now()
       });
+    }
+  });
+
+  // 🥑 GROW FUNCTION (Restored!)
+  socket.on('grow_avocado', () => {
+    if (players[socket.id]) {
+        players[socket.id].size = 60; // Grow big
+        io.emit('player_grew', { id: socket.id, size: 60 });
+
+        // Shrink back after 3 seconds
+        setTimeout(() => {
+            if (players[socket.id]) {
+                players[socket.id].size = 30; // Back to normal
+                io.emit('player_grew', { id: socket.id, size: 30 });
+            }
+        }, 3000);
     }
   });
 
@@ -224,18 +238,15 @@ io.on('connection', (socket) => {
       p.dailyClicks++;
       globalClicks++;
 
-      // 🎨 CHANGED LOGIC: Update every 50 clicks ALWAYS
       if (globalClicks % 50 === 0) {
           const randomColor = BACKGROUND_COLORS[Math.floor(Math.random() * BACKGROUND_COLORS.length)];
           currentBgColor = randomColor; 
-          io.emit('bg_update', randomColor); // Play sound/confetti
-          
+          io.emit('bg_update', randomColor); 
           if(isDbConnected) {
              await GameState.updateOne({ id: 'global' }, { currentBgColor: randomColor }).catch(()=>{});
           }
       }
 
-      // 🛠️ SYNC: Send color in every update to fix desync issues
       io.emit('score_update', { 
           id: socket.id, 
           clicks: p.clicks, 
@@ -259,7 +270,6 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const player = players[socket.id];
     if (player) {
-        // Delete immediately to prevent "Ghost Avocado"
         delete players[socket.id];
         io.emit('player_left', socket.id);
 

@@ -33,6 +33,16 @@ const getRank = (clicks: number) => {
     return "Guacamole God 👑";
 };
 
+// 🎄 CHRISTMAS CONFETTI COLORS
+const CHRISTMAS_COLORS = ['#D32F2F', '#388E3C', '#FFFFFF', '#FFD700'];
+
+// 🎵 PLAYLIST
+const PLAYLIST = [
+    { src: '/sounds/bgm.mp3', name: 'Cozy Xmas' },
+    { src: '/sounds/bgm2.mp3', name: 'Snowy Beats' },
+    { src: '/sounds/bgm3.mp3', name: 'Jingle Jam' }
+];
+
 export default function Home() {
   const { login, authenticated, user, logout } = usePrivy();
   const [joined, setJoined] = useState<boolean>(false);
@@ -54,7 +64,9 @@ export default function Home() {
   const lastMoveTime = useRef<number>(0);
   
   const [musicPlaying, setMusicPlaying] = useState(false);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const bgmRef = useRef<HTMLAudioElement | null>(null);
+
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); 
@@ -90,13 +102,32 @@ export default function Home() {
 
   const toggleMusic = () => {
     if (!bgmRef.current) {
-        bgmRef.current = new Audio('/sounds/bgm.mp3');
+        bgmRef.current = new Audio(PLAYLIST[currentTrackIndex].src);
         bgmRef.current.loop = true;
         bgmRef.current.volume = 0.3; 
     }
-    if (musicPlaying) bgmRef.current.pause();
-    else bgmRef.current.play().catch((e) => console.log("Interaction needed", e));
+    
+    if (musicPlaying) {
+        bgmRef.current.pause();
+    } else {
+        bgmRef.current.play().catch((e) => console.log("Interaction needed", e));
+    }
     setMusicPlaying(!musicPlaying);
+  };
+
+  const changeTrack = (direction: 'next' | 'prev') => {
+      let newIndex = direction === 'next' ? currentTrackIndex + 1 : currentTrackIndex - 1;
+      if (newIndex >= PLAYLIST.length) newIndex = 0;
+      if (newIndex < 0) newIndex = PLAYLIST.length - 1;
+
+      setCurrentTrackIndex(newIndex);
+
+      if (bgmRef.current) {
+          bgmRef.current.src = PLAYLIST[newIndex].src;
+          if (musicPlaying) {
+              bgmRef.current.play().catch(e => console.log(e));
+          }
+      }
   };
 
   const updateTask = (task: 'click' | 'share') => {
@@ -104,12 +135,12 @@ export default function Home() {
     const newTasks = { ...tasks, [task]: true };
     setTasks(newTasks);
     localStorage.setItem('avocado_tasks', JSON.stringify(newTasks));
-    confetti({ particleCount: 50, spread: 50, origin: { y: 0.5 } });
+    confetti({ particleCount: 50, spread: 50, origin: { y: 0.5 }, colors: CHRISTMAS_COLORS });
   };
 
   const handleShare = () => {
     updateTask('share');
-    window.open("https://twitter.com/intent/tweet?text=Growing%20my%20Avocado!%20%F0%9F%A5%91", "_blank");
+    window.open("https://twitter.com/intent/tweet?text=Growing%20my%20Christmas%20Avocado!%20%F0%9F%A5%91%F0%9F%8E%84", "_blank");
   };
 
   const handleMine = (e: React.MouseEvent) => {
@@ -152,7 +183,7 @@ export default function Home() {
     socket.on('shard_collected', (data: { id: string, shards: number }) => {
         if (data.id === socket?.id) {
             playSound('coin'); 
-            confetti({ colors: ['#00E5FF'], particleCount: 20 });
+            confetti({ colors: ['#00E5FF', '#FFFFFF'], particleCount: 20 });
         }
         setPlayers((prev) => {
             if (!prev[data.id]) return prev;
@@ -164,6 +195,14 @@ export default function Home() {
       setPlayers((prev) => ({ ...prev, [player.id]: player }));
     });
 
+    // 🥑 SIZE CHANGE LISTENER (Restored!)
+    socket.on('player_grew', (data: { id: string, size: number }) => {
+        setPlayers((prev) => {
+            if (!prev[data.id]) return prev;
+            return { ...prev, [data.id]: { ...prev[data.id], size: data.size } };
+        });
+    });
+
     socket.on('player_moved', (data) => {
       setPlayers((prev) => {
         if (!prev[data.id]) return prev;
@@ -171,15 +210,9 @@ export default function Home() {
       });
     });
 
-    // 🏆 UPDATED SCORE HANDLER (Auto-Syncs Background)
     socket.on('score_update', (data: { id: string, clicks: number, globalClicks: number, bgColor: string }) => {
         setClicks(data.globalClicks); 
-        
-        // 🎨 Auto-Sync Background Color
-        if (data.bgColor) {
-            setBgColor(data.bgColor);
-        }
-
+        if (data.bgColor) setBgColor(data.bgColor);
         setPlayers((prev) => {
             if (!prev[data.id]) return prev;
             return { ...prev, [data.id]: { ...prev[data.id], clicks: data.clicks } };
@@ -189,7 +222,7 @@ export default function Home() {
     socket.on('bg_update', (color: string) => {
         setBgColor(color);
         playSound('levelup');
-        confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: ['#FFD54F', '#81C784', '#FFFFFF', '#4CAF50'] });
+        confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: CHRISTMAS_COLORS });
     });
 
     socket.on('coin_collected', (data: { id: string, coins: number }) => {
@@ -225,7 +258,14 @@ export default function Home() {
         const validKeys = [' ', 'w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
         if (validKeys.includes(e.key)) {
             if (e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault();
-            socket.emit('grow_avocado');
+            
+            // 🥑 SEND GROW EVENT
+            if (e.key === ' ') {
+                socket.emit('grow_avocado');
+            } else {
+                // Was movement logic, but we simplified it to just follow mouse mostly.
+                // Keeping this for future expansion or you can remove movement keys if unused.
+            }
         }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -268,7 +308,7 @@ export default function Home() {
   const handleClick = (e: React.MouseEvent | React.TouchEvent) => {
     if (!joined || !socket) return;
     const target = e.target as HTMLElement;
-    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard'))) return;
+    if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard') || target.closest('.music-controls'))) return;
 
     if (dailyCount >= MAX_DAILY) return; 
 
@@ -307,18 +347,26 @@ export default function Home() {
 
   if (!joined) {
     return (
-      <main style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#FFF9C4', color: '#5D4037', fontFamily: "'Fredoka', sans-serif" }}>
-        <style jsx global>{`@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap'); body { font-family: 'Fredoka', sans-serif; }`}</style>
-        <div style={{ fontSize: '5rem', marginBottom: '10px' }}>🥑</div>
-        <h1 style={{ fontSize: '3rem', marginBottom: '10px', color: '#4CAF50', textShadow: '2px 2px 0px #FFF' }}>Little Avocado Friends</h1>
-        <p style={{ marginBottom: '40px', fontSize: '1.2rem', color: '#795548' }}>Connect your wallet to join the party!</p>
+      <main style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#D32F2F', color: '#FFF', fontFamily: "'Fredoka', sans-serif" }}>
+        <style jsx global>{`
+            @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap'); 
+            body { font-family: 'Fredoka', sans-serif; }
+            .snow-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="1" fill="white" opacity="0.4"/></svg>'); animation: snowFall 10s linear infinite; }
+            @keyframes snowFall { from { background-position: 0 0; } to { background-position: 0 100px; } }
+        `}</style>
+        <div className="snow-bg" />
+        <div style={{ fontSize: '5rem', marginBottom: '10px', zIndex: 1 }}>
+            <img src="/avatar.png" alt="Avocado" style={{ width: '120px', height: 'auto', filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.2))' }} />
+        </div>
+        <h1 style={{ fontSize: '3rem', marginBottom: '10px', color: '#FFF', textShadow: '2px 2px 0px #388E3C' }}>Merry Avocado Christmas!</h1>
+        <p style={{ marginBottom: '40px', fontSize: '1.2rem', color: '#FFEBEE', zIndex: 1 }}>Join the festive party!</p>
         {!authenticated ? (
-            <button onClick={login} className="bouncy-btn" style={{ padding: '15px 40px', fontSize: '1.2rem', cursor: 'pointer', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '50px', fontWeight: 'bold', boxShadow: '0 5px 0 #388E3C' }}>Log in with Privy</button>
+            <button onClick={login} className="bouncy-btn" style={{ padding: '15px 40px', fontSize: '1.2rem', cursor: 'pointer', background: '#388E3C', color: 'white', border: 'none', borderRadius: '50px', fontWeight: 'bold', boxShadow: '0 5px 0 #1B5E20', zIndex: 10 }}>Log in with Privy</button>
         ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-                <div style={{ background: '#FFF', padding: '10px 20px', borderRadius: '20px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>🌱 Connected: {user?.wallet?.address.slice(0, 4)}...{user?.wallet?.address.slice(-4)}</div>
-                <button onClick={handleJoin} className="bouncy-btn" style={{ padding: '15px 50px', fontSize: '1.5rem', cursor: 'pointer', background: '#FFD54F', border: 'none', borderRadius: '50px', fontWeight: 'bold', color: '#5D4037', boxShadow: '0 5px 0 #FFA000' }}>BECOME AN AVOCADO! 🥑</button>
-                <button onClick={logout} style={{ background: 'transparent', border: 'none', color: '#999', cursor: 'pointer', textDecoration: 'underline' }}>Disconnect</button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', zIndex: 10 }}>
+                <div style={{ background: '#FFF', padding: '10px 20px', borderRadius: '20px', color: '#D32F2F', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>🌱 Connected: {user?.wallet?.address.slice(0, 4)}...{user?.wallet?.address.slice(-4)}</div>
+                <button onClick={handleJoin} className="bouncy-btn" style={{ padding: '15px 50px', fontSize: '1.5rem', cursor: 'pointer', background: '#FFD700', border: 'none', borderRadius: '50px', fontWeight: 'bold', color: '#5D4037', boxShadow: '0 5px 0 #FFA000' }}>ENTER WONDERLAND ❄️</button>
+                <button onClick={logout} style={{ background: 'transparent', border: 'none', color: '#FFEBEE', cursor: 'pointer', textDecoration: 'underline' }}>Disconnect</button>
             </div>
         )}
       </main>
@@ -340,7 +388,21 @@ export default function Home() {
         .scoreboard { top: 20px; left: 20px; }
         .mobile-menu-btn { display: none; }
 
-        /* DESKTOP DEFAULT STYLES FOR MINING */
+        /* ❄️ SNOWFLAKES */
+        .snowflake { position: fixed; top: -10px; z-index: 1; color: white; font-size: 1em; animation-name: fall; animation-timing-function: linear; animation-iteration-count: infinite; }
+        @keyframes fall { to { transform: translateY(110vh); } }
+        
+        .sf1 { left: 10%; animation-duration: 10s; animation-delay: 0s; }
+        .sf2 { left: 20%; animation-duration: 12s; animation-delay: 1s; }
+        .sf3 { left: 30%; animation-duration: 8s; animation-delay: 2s; }
+        .sf4 { left: 40%; animation-duration: 15s; animation-delay: 0s; }
+        .sf5 { left: 50%; animation-duration: 11s; animation-delay: 3s; }
+        .sf6 { left: 60%; animation-duration: 9s; animation-delay: 1s; }
+        .sf7 { left: 70%; animation-duration: 14s; animation-delay: 2s; }
+        .sf8 { left: 80%; animation-duration: 13s; animation-delay: 0s; }
+        .sf9 { left: 90%; animation-duration: 10s; animation-delay: 4s; }
+        .sf10 { left: 95%; animation-duration: 16s; animation-delay: 1s; }
+
         .mining-container {
             position: absolute;
             top: 370px;
@@ -356,23 +418,31 @@ export default function Home() {
             gap: 10px;
             cursor: pointer;
         }
-        .mining-text-content {
-            display: block;
-        }
+        .mining-text-content { display: block; }
 
-        /* RESPONSIVE: TABLET & MOBILE (< 900px) */
+        .music-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: white;
+            padding: 5px 10px;
+            border-radius: 30px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .control-btn {
+            background: transparent;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 50%;
+            transition: background 0.2s;
+        }
+        .control-btn:hover { background: #EEE; }
+
         @media (max-width: 900px) {
             .mobile-menu-btn { display: flex !important; }
-            
-            .chat-box { 
-                width: 250px !important; 
-                height: 150px !important; 
-                left: 10px !important; 
-                bottom: 10px !important; 
-                font-size: 12px; 
-            }
-            
-            /* Hide Scoreboard unless toggled */
+            .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; }
             .scoreboard { 
                 display: ${mobileMenuOpen ? 'flex' : 'none'} !important;
                 position: fixed !important;
@@ -381,7 +451,6 @@ export default function Home() {
                 transform: translate(-50%, -50%) scale(1.1) !important;
                 z-index: 100;
             }
-            
             .mobile-backdrop {
                 display: ${mobileMenuOpen ? 'block' : 'none'};
                 position: fixed;
@@ -390,61 +459,54 @@ export default function Home() {
                 background: rgba(0,0,0,0.6);
                 z-index: 90;
             }
-
-            /* TRANSFORM MINING BUTTON TO CIRCLE ICON */
             .mining-container {
-                /* Move to toggle position if menu open, else stay at top left but lower */
                 top: ${mobileMenuOpen ? '50%' : '100px'} !important; 
                 left: ${mobileMenuOpen ? '50%' : '20px'} !important;
                 transform: ${mobileMenuOpen ? 'translate(-50%, 180px)' : 'none'} !important;
                 z-index: ${mobileMenuOpen ? 120 : 25} !important;
-                
-                /* Circle Shape */
                 width: 50px !important;
                 height: 50px !important;
                 border-radius: 50% !important;
                 padding: 0 !important;
                 justify-content: center !important;
-                background: #E0F7FA !important; /* Crystal Blue */
+                background: #E0F7FA !important;
                 border: 2px solid #00E5FF !important;
             }
-            
-            /* Hide text on mobile */
-            .mining-text-content {
-                display: none !important;
-            }
+            .mining-text-content { display: none !important; }
         }
-        
         @keyframes rippleEffect { 0% { width: 0px; height: 0px; opacity: 1; } 100% { width: 120px; height: 120px; opacity: 0; } }
         @keyframes floatUp { 0% { transform: translateY(0px); opacity: 1; } 100% { transform: translateY(-50px); opacity: 0; } }
         @keyframes float { 0% { transform: translateY(0px) translateX(-50%) scale(1, 1); } 50% { transform: translateY(-10px) translateX(-50%) scale(1.1, 0.9); } 100% { transform: translateY(0px) translateX(-50%) scale(1, 1); } }
         @keyframes spin { 0% { transform: translate(-50%, -50%) rotateY(0deg); } 100% { transform: translate(-50%, -50%) rotateY(360deg); } }
       `}</style>
 
-      {/* 📱 MOBILE BACKDROP */}
-      <div className="mobile-backdrop" onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(false); }} />
+      {/* ❄️ SNOWFLAKES */}
+      <div className="snowflake sf1">❄</div>
+      <div className="snowflake sf2">❅</div>
+      <div className="snowflake sf3">❆</div>
+      <div className="snowflake sf4">❄</div>
+      <div className="snowflake sf5">❅</div>
+      <div className="snowflake sf6">❆</div>
+      <div className="snowflake sf7">❄</div>
+      <div className="snowflake sf8">❅</div>
+      <div className="snowflake sf9">❆</div>
+      <div className="snowflake sf10">❄</div>
 
-      {/* 📱 MOBILE TOGGLE BUTTON */}
-      <button 
-        className="mobile-menu-btn" 
-        onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(!mobileMenuOpen); }}
-        style={{ position: 'absolute', top: 20, left: 20, zIndex: 110, background: '#FFF', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)', cursor: 'pointer' }}
-      >
-        {mobileMenuOpen ? '✕' : '📊'}
-      </button>
+      <div className="mobile-backdrop" onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(false); }} />
+      <button className="mobile-menu-btn" onClick={(e) => { e.stopPropagation(); setMobileMenuOpen(!mobileMenuOpen); }} style={{ position: 'absolute', top: 20, left: 20, zIndex: 110, background: '#FFF', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)', cursor: 'pointer' }}>{mobileMenuOpen ? '✕' : '📊'}</button>
 
       {/* TOP RIGHT BUTTONS */}
-      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 30, display: 'flex', gap: '10px' }}>
+      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 30, display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div className="music-controls">
+            <button onClick={() => changeTrack('prev')} className="control-btn">⏮️</button>
+            <button onClick={toggleMusic} className="control-btn" style={{ fontSize: '20px' }}>{musicPlaying ? '⏸️' : '▶️'}</button>
+            <button onClick={() => changeTrack('next')} className="control-btn">⏭️</button>
+        </div>
         <button onClick={() => setShowTasks(!showTasks)} className="task-btn" style={{ background: '#FFD54F', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📝</button>
         <button onClick={() => setShowLeaderboard(!showLeaderboard)} className="leaderboard-btn" style={{ background: '#81D4FA', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏆</button>
-        <button onClick={toggleMusic} className="music-btn" style={{ background: 'white', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{musicPlaying ? '🎵' : '🔇'}</button>
       </div>
 
-      {/* 💎 MINING BUTTON (RESPONSIVE) */}
-      <div 
-        className="mining-btn mining-container" 
-        onClick={(e) => { e.stopPropagation(); setShowCave(true); }}
-      >
+      <div className="mining-btn mining-container" onClick={(e) => { e.stopPropagation(); setShowCave(true); }}>
           <span style={{ fontSize: '24px' }}>⛏️</span>
           <div className="mining-text-content">
               <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#5D4037', textTransform: 'uppercase' }}>Crystal Cave</div>
@@ -452,27 +514,16 @@ export default function Home() {
           </div>
       </div>
 
-      {/* 💎 CAVE MODAL */}
       {showCave && (
           <div className="cave-modal" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
               <button onClick={(e) => { e.stopPropagation(); setShowCave(false); }} style={{ position: 'absolute', top: 30, right: 30, background: 'transparent', border: 'none', fontSize: '40px', color: 'white', cursor: 'pointer' }}>✕</button>
-              
               <h1 style={{ fontSize: '3rem', marginBottom: '20px', textShadow: '0 0 10px #00E5FF' }}>Crystal Cave</h1>
-              
-              <div style={{ fontSize: '1.5rem', marginBottom: '40px' }}>
-                  Weekly Shards Remaining: <span style={{ color: '#00E5FF', fontWeight: 'bold' }}>{globalShards}</span> / 100
-              </div>
-
+              <div style={{ fontSize: '1.5rem', marginBottom: '40px' }}>Weekly Shards: <span style={{ color: '#00E5FF', fontWeight: 'bold' }}>{globalShards}</span> / 100</div>
               {globalShards > 0 ? (
                   <div onClick={handleMine} style={{ fontSize: '150px', cursor: 'pointer', transition: 'transform 0.1s', filter: 'drop-shadow(0 0 20px #00E5FF)' }}>💎</div>
               ) : (
-                  <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '80px', marginBottom: '20px' }}>🌑</div>
-                      <p style={{ fontSize: '1.2rem', color: '#AAA' }}>The vein has collapsed.<br/>Come back next week!</p>
-                  </div>
+                  <div style={{ textAlign: 'center' }}><div style={{ fontSize: '80px', marginBottom: '20px' }}>🌑</div><p style={{ fontSize: '1.2rem', color: '#AAA' }}>The vein has collapsed.<br/>Come back next week!</p></div>
               )}
-              
-              <p style={{ marginTop: '40px', fontSize: '0.9rem', color: '#888' }}>Tap the crystal to mine shards!</p>
           </div>
       )}
 
@@ -493,22 +544,17 @@ export default function Home() {
               {Object.entries(highscores).sort(([,a], [,b]) => b.clicks - a.clicks).slice(0, 5).map(([addr, stats], i) => (
                   <div key={addr} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', padding: '5px 0', borderBottom: '1px solid #EEE' }}>
                       <span style={{ fontWeight: 'bold', color: i===0 ? '#FFD700' : '#5D4037' }}>#{i+1} {addr.slice(0,4)}</span>
-                      <span>
-                        <span style={{ color: '#4CAF50', marginRight: '5px' }}>{stats.clicks}</span>
-                        <span style={{ color: '#FFD700' }}>{stats.coins > 0 ? `(${stats.coins}🪙)` : ''}</span>
-                      </span>
+                      <span><span style={{ color: '#4CAF50', marginRight: '5px' }}>{stats.clicks}</span><span style={{ color: '#FFD700' }}>{stats.coins > 0 ? `(${stats.coins}🪙)` : ''}</span></span>
                   </div>
               ))}
           </div>
       )}
 
-      {/* SCOREBOARD */}
       <div className="scoreboard" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 10, display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <div style={{ background: 'rgba(255, 255, 255, 0.4)', backdropFilter: 'blur(8px)', padding: '10px 20px', borderRadius: '20px', border: '2px solid rgba(255,255,255,0.6)', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
             <h2 style={{ margin: 0, color: '#3E2723', fontSize: '16px', textTransform: 'uppercase', letterSpacing: '1px' }}>Community Score</h2>
             <div style={{ fontSize: '32px', fontWeight: 'bold', color: '#4CAF50', textShadow: '2px 2px 0 white' }}>{clicks}</div>
         </div>
-        
         {myPlayer && (
             <div style={{ background: '#FFF9C4', padding: '10px 20px', borderRadius: '20px', border: '2px solid #FFF', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
                 <div style={{ marginBottom: '8px' }}>
@@ -518,23 +564,12 @@ export default function Home() {
                 <h3 style={{ margin: 0, color: '#FBC02D', fontSize: '14px', textTransform: 'uppercase' }}>My Contribution</h3>
                 <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#5D4037' }}>{myPlayer.clicks}</div>
                 <div style={{ fontSize: '12px', color: '#8D6E63', marginTop: '5px', fontWeight: 'bold' }}>{getRank(myPlayer.clicks)}</div>
-                
-                {/* COIN DISPLAY */}
-                <div style={{ marginTop: '10px', background: '#FFF', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <span style={{ fontSize: '18px' }}>🪙</span>
-                    <span style={{ fontWeight: 'bold', color: '#FFA000' }}>Coins: {myPlayer.coins}</span>
-                </div>
-
-                {/* 💎 SHARD DISPLAY */}
-                <div style={{ marginTop: '5px', background: '#E0F7FA', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #00E5FF' }}>
-                    <span style={{ fontSize: '18px' }}>💎</span>
-                    <span style={{ fontWeight: 'bold', color: '#006064' }}>Shards: {myPlayer.shards}</span>
-                </div>
+                <div style={{ marginTop: '10px', background: '#FFF', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ fontSize: '18px' }}>🪙</span><span style={{ fontWeight: 'bold', color: '#FFA000' }}>Coins: {myPlayer.coins}</span></div>
+                <div style={{ marginTop: '5px', background: '#E0F7FA', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #00E5FF' }}><span style={{ fontSize: '18px' }}>💎</span><span style={{ fontWeight: 'bold', color: '#006064' }}>Shards: {myPlayer.shards}</span></div>
             </div>
         )}
       </div>
 
-      {/* CHAT BOX */}
       <div className="chat-container chat-box" style={{ position: 'absolute', background: 'rgba(255, 255, 255, 0.4)', backdropFilter: 'blur(8px)', borderRadius: '20px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', border: '2px solid rgba(255,255,255,0.5)', zIndex: 20, overflow: 'hidden', transition: 'all 0.3s ease' }}>
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px', color: '#5D4037', fontSize: 'inherit', display: 'flex', flexDirection: 'column', gap: '5px' }}>
               {messages.map((msg) => ( <div key={msg.id} style={{ background: 'rgba(255,255,255,0.6)', padding: '4px 8px', borderRadius: '8px', alignSelf: 'flex-start' }}><span style={{ color: msg.color, fontWeight: 'bold' }}>{msg.sender.slice(0,4)}: </span><span>{msg.text}</span></div> ))}
@@ -547,17 +582,26 @@ export default function Home() {
       </div>
 
       {ripples.map(ripple => ( <div key={ripple.id} style={{ position: 'absolute', left: ripple.x, top: ripple.y, width: '0px', height: '0px', borderRadius: '50%', border: '4px solid rgba(255, 255, 255, 0.6)', transform: 'translate(-50%, -50%)', animation: 'rippleEffect 0.5s linear forwards', pointerEvents: 'none' }} /> ))}
-      {floaters.map(f => ( <div key={f.id} style={{ position: 'absolute', left: f.x, top: f.y, color: '#4CAF50', fontWeight: 'bold', fontSize: '24px', pointerEvents: 'none', textShadow: '2px 2px 0px white', animation: 'floatUp 1s ease-out forwards' }}>{f.text}</div> ))}
+      {floaters.map(f => ( <div key={f.id} style={{ position: 'absolute', left: f.x, top: f.y, color: '#D32F2F', fontWeight: 'bold', fontSize: '24px', pointerEvents: 'none', textShadow: '2px 2px 0px white', animation: 'floatUp 1s ease-out forwards' }}>{f.text}</div> ))}
 
-      {activeCoin && (
-          <div style={{ position: 'absolute', left: `${activeCoin.x}%`, top: `${activeCoin.y}%`, transform: 'translate(-50%, -50%)', pointerEvents: 'none', fontSize: '40px', animation: 'spin 2s linear infinite' }}>🪙</div>
-      )}
+      {activeCoin && ( <div style={{ position: 'absolute', left: `${activeCoin.x}%`, top: `${activeCoin.y}%`, transform: 'translate(-50%, -50%)', pointerEvents: 'none', fontSize: '40px', animation: 'spin 2s linear infinite' }}>🪙</div> )}
 
       {Object.values(players).map((player) => (
         <div key={player.id} style={{ position: 'absolute', left: `${player.x}%`, top: `${player.y}%`, transform: 'translateX(-50%)', pointerEvents: 'none', transition: 'left 0.1s linear, top 0.1s linear, font-size 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 5, fontSize: `${player.size || 30}px` }}>
           <div style={{ background: 'white', padding: '2px 8px', borderRadius: '10px', color: '#5D4037', fontSize: '10px', fontWeight: 'bold', marginBottom: '2px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', whiteSpace: 'nowrap' }}>{player.solanaAddress.slice(0, 4)}</div>
-          <div style={{ fontSize: '1em', filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.2))', animation: 'float 2s ease-in-out infinite' }}>🥑</div>
-          {player.clicks > 0 && <div style={{ fontSize: '10px', color: '#FFF', background: '#81C784', padding: '0 4px', borderRadius: '4px', marginTop: '-5px' }}>{player.clicks}</div>}
+          
+          <img 
+            src="/avatar.png" 
+            alt="Avocado" 
+            style={{ 
+                width: `${player.size || 40}px`, 
+                height: 'auto', 
+                filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.2))', 
+                animation: 'float 2s ease-in-out infinite' 
+            }} 
+          />
+
+          {player.clicks > 0 && <div style={{ fontSize: '10px', color: '#FFF', background: '#388E3C', padding: '0 4px', borderRadius: '4px', marginTop: '-5px' }}>{player.clicks}</div>}
         </div>
       ))}
     </main>
