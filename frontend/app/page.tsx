@@ -525,13 +525,13 @@ export default function Home() {
         
         @media (max-width: 900px) {
             .mobile-menu-btn { display: flex !important; }
-            .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; }
+            .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; z-index: 20; }
             .scoreboard { 
                 display: ${mobileMenuOpen ? 'flex' : 'none'} !important; 
                 position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) scale(1.1) !important; 
-                z-index: 80 !important; /* 🔥 Fix: Increased Z-Index to be clickable */
+                z-index: 999 !important; /* 🔥 Fix: Increased Z-Index to be clickable */
             }
-            
+            .mobile-backdrop { display: ${mobileMenuOpen ? 'block' : 'none'}; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 99; }
             .mining-text-content { display: none !important; }
             .mobile-joystick { display: flex !important; }
         }
