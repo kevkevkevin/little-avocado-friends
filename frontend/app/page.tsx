@@ -18,13 +18,16 @@ interface Player {
   coins: number;
   shards: number;
   trashCollected: number; 
+  inventory: string[]; 
+  equippedSkin: string; 
+  equippedPet: string;
 }
-interface Trash { id: string; x: number; y: number; }
+interface Item { id: string; x: number; y: number; }
+interface ShopItem { id: string; name: string; type: 'skin'|'pet'; price: number; currency: 'coins' | 'shards'; emoji: string; }
 interface InitState { players: Record<string, Player>; backgroundColor: string; globalClicks: number; shards: number; }
 interface Ripple { id: number; x: number; y: number; }
 interface FloatingText { id: number; x: number; y: number; text: string; }
 interface ChatMessage { id: string; text: string; sender: string; color: string; timestamp: number; }
-interface Coin { id: string; x: number; y: number; }
 
 const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001";
 let socket: Socket | undefined;
@@ -56,10 +59,15 @@ export default function Home() {
   const [ripples, setRipples] = useState<Ripple[]>([]);
   const [floaters, setFloaters] = useState<FloatingText[]>([]);
   
-  const [activeCoin, setActiveCoin] = useState<Coin | null>(null);
-  const [trashItems, setTrashItems] = useState<Trash[]>([]); 
+  const [coinItems, setCoinItems] = useState<Item[]>([]);
+  const [trashItems, setTrashItems] = useState<Item[]>([]); 
   const [damageFlash, setDamageFlash] = useState(false); 
   
+  // 🛒 SHOP STATE
+  const [showShop, setShowShop] = useState(false);
+  const [shopTab, setShopTab] = useState<'buy' | 'inventory'>('buy'); // 🆕 Tab State
+  const [shopCatalog, setShopCatalog] = useState<ShopItem[]>([]);
+
   const [showWarning, setShowWarning] = useState(false);
   const hasSeenWarningRef = useRef(false);
 
@@ -82,9 +90,8 @@ export default function Home() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState("");
 
-  // 🕹️ JOYSTICK STATE
   const joystickRef = useRef<HTMLDivElement>(null);
-  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 }); // Visual offset of the knob
+  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
 
   const [tasks, setTasks] = useState(() => {
@@ -179,6 +186,24 @@ export default function Home() {
       el.style.transform = "scale(0)";
   };
 
+  const handleCollectCoin = (e: React.MouseEvent, coinId: string) => {
+      e.stopPropagation();
+      socket?.emit('collect_coin', coinId);
+      playSound('coin');
+      const el = e.target as HTMLElement;
+      el.style.transform = "scale(0)";
+  };
+
+  const handleBuy = (item: ShopItem) => {
+      socket?.emit('buy_item', item.id);
+  };
+  const handleEquip = (itemId: string) => {
+      socket?.emit('equip_item', itemId);
+  };
+  const handleUnequip = (type: 'skin'|'pet') => {
+      socket?.emit('unequip_item', type);
+  };
+
   useEffect(() => {
     socket = io(SERVER_URL);
 
@@ -200,17 +225,62 @@ export default function Home() {
       }
     });
 
-    socket.on('trash_sync', (items: Trash[]) => setTrashItems(items));
-    socket.on('trash_spawned', (item: Trash) => setTrashItems(prev => [...prev, item]));
+    socket.on('shop_data', (catalog: ShopItem[]) => setShopCatalog(catalog));
+    
+    socket.on('purchase_success', (data: { itemId: string, coins: number, shards: number, inventory: string[] }) => {
+        playSound('coin');
+        confetti({ colors: ['#FFD700', '#FFFFFF'] });
+        setPlayers((prev) => {
+            if (!socket?.id || !prev[socket.id]) return prev;
+            return { 
+                ...prev, 
+                [socket.id]: { 
+                    ...prev[socket.id], 
+                    coins: data.coins, 
+                    shards: data.shards, 
+                    inventory: data.inventory 
+                } 
+            };
+        });
+    });
+
+    socket.on('player_updated', (data: { id: string, username?: string, equippedSkin?: string, equippedPet?: string }) => {
+        setPlayers((prev) => {
+            if (!prev[data.id]) return prev;
+            return { 
+                ...prev, 
+                [data.id]: { 
+                    ...prev[data.id], 
+                    ...(data.username !== undefined && { username: data.username }),
+                    ...(data.equippedSkin !== undefined && { equippedSkin: data.equippedSkin }),
+                    ...(data.equippedPet !== undefined && { equippedPet: data.equippedPet })
+                } 
+            };
+        });
+    });
+
+    socket.on('trash_sync', (items: Item[]) => setTrashItems(items));
+    socket.on('coin_sync', (items: Item[]) => setCoinItems(items));
+
+    socket.on('trash_spawned', (item: Item) => setTrashItems(prev => [...prev, item]));
+    socket.on('coin_spawned', (item: Item) => setCoinItems(prev => [...prev, item]));
+    
     socket.on('trash_collected', (data: { trashId: string, collectorId: string, newCount: number }) => {
         setTrashItems(prev => prev.filter(t => t.id !== data.trashId));
         setPlayers((prev) => {
             if (!prev[data.collectorId]) return prev;
             return { ...prev, [data.collectorId]: { ...prev[data.collectorId], trashCollected: data.newCount } };
         });
-        if (data.collectorId === socket?.id) {
-            confetti({ colors: ['#FFFFFF', '#81D4FA'], particleCount: 20, spread: 30 });
-        }
+        if (data.collectorId === socket?.id) confetti({ colors: ['#FFFFFF', '#81D4FA'], particleCount: 20, spread: 30 });
+    });
+
+    socket.on('coin_collected_map', (data: { coinId: string, collectorId: string, newCoins: number }) => {
+        setCoinItems(prev => prev.filter(c => c.id !== data.coinId));
+        setPlayers((prev) => {
+            if (!prev[data.collectorId]) return prev;
+            return { ...prev, [data.collectorId]: { ...prev[data.collectorId], coins: data.newCoins } };
+        });
+        if (data.collectorId === socket?.id) confetti({ colors: ['#FFD700'], particleCount: 20 });
     });
     
     socket.on('score_damage', (data: { globalClicks: number, damage: number }) => {
@@ -222,13 +292,6 @@ export default function Home() {
     socket.on('game_over_reset', () => {
         alert("💀 THE COMMUNITY FAILED! ALL PROGRESS HAS BEEN RESET.");
         window.location.reload();
-    });
-
-    socket.on('player_updated', (data: { id: string, username: string }) => {
-        setPlayers((prev) => {
-            if (!prev[data.id]) return prev;
-            return { ...prev, [data.id]: { ...prev[data.id], username: data.username } };
-        });
     });
 
     socket.on('mining_update', (newCount: number) => {
@@ -286,17 +349,6 @@ export default function Home() {
         setBgColor(color);
         playSound('levelup');
         confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 }, colors: CHRISTMAS_COLORS });
-    });
-
-    socket.on('coin_collected', (data: { id: string, coins: number }) => {
-        if (data.id === socket?.id) {
-            playSound('coin');
-            confetti({ colors: ['#FFD700'] }); 
-        }
-        setPlayers((prev) => {
-            if (!prev[data.id]) return prev;
-            return { ...prev, [data.id]: { ...prev[data.id], coins: data.coins } };
-        });
     });
 
     socket.on('leaderboard_update', (data: Record<string, { clicks: number, coins: number, shards: number, username?: string }>) => { setHighscores(data); });
@@ -359,10 +411,9 @@ export default function Home() {
       }
   }
 
-  // DESKTOP ONLY MOVE
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => { handleInputMove(e.clientX, e.clientY); };
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => { handleInputMove(e.touches[0].clientX, e.touches[0].clientY); };
 
-  // CORE LOGIC FOR POINTS
   const performClick = (x: number, y: number) => {
       if (!joined || !socket) return;
       if (dailyCount >= MAX_DAILY) return; 
@@ -382,18 +433,32 @@ export default function Home() {
       setDailyCount(prev => prev + 1);
   };
 
-  // DESKTOP CLICK
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent | React.TouchEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest && (target.closest('.chat-container') || target.closest('.music-btn') || target.closest('.task-btn') || target.closest('.leaderboard-btn') || target.closest('.mining-btn-internal') || target.closest('.cave-modal') || target.closest('.mobile-menu-btn') || target.closest('.scoreboard') || target.closest('.music-controls') || target.closest('.mobile-joystick'))) return;
-    performClick(e.clientX, e.clientY);
+
+    let clientX, clientY;
+    if ('touches' in e) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+    } else {
+        clientX = (e as React.MouseEvent).clientX;
+        clientY = (e as React.MouseEvent).clientY;
+    }
+    performClick(clientX, clientY);
   };
 
-  // 🕹️ JOYSTICK LOGIC
+  const handleJoystickClick = (e: React.TouchEvent) => {
+      e.stopPropagation(); 
+      const touch = e.touches[0];
+      performClick(touch.clientX, touch.clientY);
+  };
+
   const handleJoystickStart = (e: React.TouchEvent) => {
       e.stopPropagation();
       setIsDragging(true);
-      performClick(e.touches[0].clientX, e.touches[0].clientY); // Tap to click initially
+      const touch = e.touches[0];
+      performClick(touch.clientX, touch.clientY);
   };
 
   const handleJoystickMove = (e: React.TouchEvent) => {
@@ -405,7 +470,6 @@ export default function Home() {
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
       
-      // Calculate Delta (Limit to 30px radius)
       let deltaX = touch.clientX - centerX;
       let deltaY = touch.clientY - centerY;
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
@@ -419,10 +483,7 @@ export default function Home() {
       
       setJoystickPos({ x: deltaX, y: deltaY });
 
-      // MOVE CHARACTER (Relative to center of screen usually, or absolute map)
-      // Since our game uses absolute X/Y (0-100%), we'll map the joystick to the screen.
-      // NOTE: This moves the player based on Joystick Angle relative to screen center.
-      const moveX = 50 + (deltaX / maxRadius) * 45; // 50% is center, move 45% either way
+      const moveX = 50 + (deltaX / maxRadius) * 45; 
       const moveY = 50 + (deltaY / maxRadius) * 45;
       
       handleInputMove(moveX * (window.innerWidth / 100), moveY * (window.innerHeight / 100));
@@ -430,7 +491,7 @@ export default function Home() {
 
   const handleJoystickEnd = () => {
       setIsDragging(false);
-      setJoystickPos({ x: 0, y: 0 }); // Reset knob to center
+      setJoystickPos({ x: 0, y: 0 });
   };
 
   const sendChat = (e?: React.FormEvent) => {
@@ -472,7 +533,7 @@ export default function Home() {
 
   return (
     <main 
-      onMouseMove={handleMouseMove} onClick={handleClick}
+      onMouseMove={handleMouseMove} onClick={handleClick} onTouchMove={handleTouchMove} onTouchStart={handleClick}
       style={{ width: '100vw', height: '100vh', backgroundColor: bgColor, position: 'relative', overflow: 'hidden', cursor: dailyCount >= MAX_DAILY ? "not-allowed" : "url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><text y=\"20\" font-size=\"20\">🥑</text></svg>'), auto", transition: 'background-color 1.5s ease', touchAction: 'none', fontFamily: "'Fredoka', sans-serif" }}
     >
       <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'red', opacity: damageFlash ? 0.3 : 0, pointerEvents: 'none', transition: 'opacity 0.1s ease', zIndex: 999 }} />
@@ -497,34 +558,25 @@ export default function Home() {
         .sf8 { left: 80%; animation-duration: 13s; animation-delay: 0s; }
         .sf9 { left: 90%; animation-duration: 10s; animation-delay: 4s; }
         .sf10 { left: 95%; animation-duration: 16s; animation-delay: 1s; }
-        .mining-container { position: absolute; top: 160px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; }
+       /*  .mining-container { position: absolute; top: 160px; left: 20px; z-index: 25; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 20px; border: 3px solid #29B6F6; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; alignItems: center; gap: 10px; cursor: pointer; } */
         .mining-text-content { display: block; }
         .music-controls { display: flex; align-items: center; gap: 8px; background: white; padding: 5px 10px; border-radius: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .control-btn { background: transparent; border: none; font-size: 18px; cursor: pointer; padding: 5px; border-radius: 50%; transition: background 0.2s; }
         .control-btn:hover { background: #EEE; }
-        
-        .mining-btn-internal { 
-            margin-top: 10px; background: #E0F7FA; padding: 8px 12px; border-radius: 12px; border: 2px solid #00E5FF; display: flex; alignItems: center; gap: 10px; cursor: pointer; transition: transform 0.1s;
-        }
+        .mining-btn-internal { margin-top: 10px; background: #E0F7FA; padding: 8px 12px; border-radius: 12px; border: 2px solid #00E5FF; display: flex; alignItems: center; gap: 10px; cursor: pointer; transition: transform 0.1s; }
         .mining-btn-internal:active { transform: scale(0.95); }
-
         .mobile-joystick {
             position: fixed; bottom: 30px; right: 30px; width: 100px; height: 100px;
             background: rgba(255, 255, 255, 0.4); border: 2px solid rgba(255, 255, 255, 0.6);
             border-radius: 50%; z-index: 150; display: none; align-items: center; justify-content: center;
-            touch-action: none;
+            font-size: 30px; user-select: none; touch-action: manipulation; box-shadow: 0 0 15px rgba(0,0,0,0.2);
         }
-        .joystick-knob {
-            width: 40px; height: 40px; background: #4CAF50; border-radius: 50%;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3); pointer-events: none;
-            display: flex; align-items: center; justify-content: center; font-size: 20px;
-        }
-
+        .mobile-joystick:active { background: rgba(255, 255, 255, 0.8); transform: scale(0.95); }
+        .joystick-knob { width: 40px; height: 40px; background: #4CAF50; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.3); pointer-events: none; display: flex; align-items: center; justify-content: center; font-size: 20px; }
         @keyframes heartbeat { 0% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.1); } 100% { transform: translate(-50%, -50%) scale(1); } }
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
-        
         @media (max-width: 900px) {
-            .mobile-menu-btn { display: flex !important; }
+           .mobile-menu-btn { display: flex !important; }
             .chat-box { width: 250px !important; height: 150px !important; left: 10px !important; bottom: 10px !important; font-size: 12px; z-index: 20; }
             .scoreboard { 
                 display: ${mobileMenuOpen ? 'flex' : 'none'} !important; 
@@ -541,7 +593,7 @@ export default function Home() {
         @keyframes spin { 0% { transform: translate(-50%, -50%) rotateY(0deg); } 100% { transform: translate(-50%, -50%) rotateY(360deg); } }
       `}</style>
 
-      {/* 🕹️ NEW JOYSTICK IMPLEMENTATION */}
+      {/* 🕹️ JOYSTICK */}
       <div 
         className="mobile-joystick" 
         ref={joystickRef}
@@ -562,10 +614,63 @@ export default function Home() {
           </div>
       )}
 
+      {/* 🏪 SHOP MODAL */}
+      {showShop && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+              <button onClick={() => setShowShop(false)} style={{ position: 'absolute', top: 30, right: 30, background: 'transparent', border: 'none', fontSize: '40px', color: 'white', cursor: 'pointer' }}>✕</button>
+              <h1 style={{ fontSize: '3rem', marginBottom: '20px', textShadow: '0 0 10px #FFD700' }}>Avocado Shop 🏪</h1>
+              
+              {/* TABS */}
+              <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
+                  <button onClick={() => setShopTab('buy')} style={{ padding: '10px 20px', borderRadius: '20px', border: 'none', fontWeight: 'bold', background: shopTab === 'buy' ? '#FFD700' : 'white', cursor: 'pointer' }}>Buy</button>
+                  <button onClick={() => setShopTab('inventory')} style={{ padding: '10px 20px', borderRadius: '20px', border: 'none', fontWeight: 'bold', background: shopTab === 'inventory' ? '#4CAF50' : 'white', color: shopTab === 'inventory' ? 'white' : 'black', cursor: 'pointer' }}>My Inventory</button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', maxHeight: '60vh', overflowY: 'auto', padding: '20px' }}>
+                  {shopCatalog.filter(item => {
+                      if (shopTab === 'buy') return !myPlayer?.inventory?.includes(item.id);
+                      return myPlayer?.inventory?.includes(item.id);
+                  }).map(item => {
+                      const isEquippedSkin = myPlayer?.equippedSkin === item.emoji;
+                      const isEquippedPet = myPlayer?.equippedPet === item.emoji;
+                      const isEquipped = isEquippedSkin || isEquippedPet;
+
+                      return (
+                          <div key={item.id} style={{ background: 'white', padding: '20px', borderRadius: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', color: '#5D4037', border: isEquipped ? '4px solid #4CAF50' : 'none' }}>
+                              <div style={{ fontSize: '50px' }}>{item.emoji}</div>
+                              <div style={{ fontWeight: 'bold' }}>{item.name}</div>
+                              <div style={{ fontSize: '12px', color: '#757575', textTransform: 'uppercase' }}>{item.type}</div>
+                              
+                              {shopTab === 'buy' ? (
+                                  <>
+                                    <div style={{ fontSize: '14px', color: '#757575' }}>{item.price} {item.currency === 'coins' ? '🪙' : '💎'}</div>
+                                    <button onClick={() => handleBuy(item)} style={{ background: '#FFD700', color: '#5D4037', border: 'none', padding: '8px 16px', borderRadius: '20px', fontWeight: 'bold', cursor: 'pointer' }}>Buy</button>
+                                  </>
+                              ) : (
+                                  isEquipped ? (
+                                      <button onClick={() => handleUnequip(item.type)} style={{ background: '#FF5252', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '20px', cursor: 'pointer' }}>Unequip</button>
+                                  ) : (
+                                      <button onClick={() => handleEquip(item.id)} style={{ background: '#4CAF50', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '20px', cursor: 'pointer' }}>Equip</button>
+                                  )
+                              )}
+                          </div>
+                      )
+                  })}
+                  {shopTab === 'inventory' && shopCatalog.filter(i => myPlayer?.inventory?.includes(i.id)).length === 0 && (
+                      <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#AAA' }}>Inventory Empty 🕸️</div>
+                  )}
+              </div>
+          </div>
+      )}
+
       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: '100px', opacity: 0.3, zIndex: 0, animation: 'heartbeat 2s infinite ease-in-out', pointerEvents: 'none' }}>💚</div>
 
       {trashItems.map(trash => (
           <div key={trash.id} onClick={(e) => handleCollectTrash(e, trash.id)} style={{ position: 'absolute', left: `${trash.x}%`, top: `${trash.y}%`, fontSize: '40px', cursor: 'pointer', zIndex: 20, transition: 'transform 0.2s', animation: 'float 2s ease-in-out infinite' }}>☃️</div>
+      ))}
+
+      {coinItems.map(coin => (
+          <div key={coin.id} onClick={(e) => handleCollectCoin(e, coin.id)} style={{ position: 'absolute', left: `${coin.x}%`, top: `${coin.y}%`, fontSize: '40px', cursor: 'pointer', zIndex: 20, transition: 'transform 0.2s', animation: 'spin 2s linear infinite' }}>🪙</div>
       ))}
 
       <div className="snowflake sf1">❄</div>
@@ -588,8 +693,17 @@ export default function Home() {
             <button onClick={toggleMusic} className="control-btn" style={{ fontSize: '20px' }}>{musicPlaying ? '⏸️' : '▶️'}</button>
             <button onClick={() => changeTrack('next')} className="control-btn">⏭️</button>
         </div>
+        <button onClick={() => setShowShop(true)} className="task-btn" style={{ background: '#FF7043', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏪</button>
         <button onClick={() => setShowTasks(!showTasks)} className="task-btn" style={{ background: '#FFD54F', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📝</button>
         <button onClick={() => setShowLeaderboard(!showLeaderboard)} className="leaderboard-btn" style={{ background: '#81D4FA', border: 'none', borderRadius: '50%', width: '50px', height: '50px', fontSize: '24px', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏆</button>
+      </div>
+
+      <div className="mining-btn mining-container" onClick={(e) => { e.stopPropagation(); setShowCave(true); }}>
+          <span style={{ fontSize: '24px' }}>⛏️</span>
+          <div className="mining-text-content">
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#5D4037', textTransform: 'uppercase' }}>Crystal Cave</div>
+              <div style={{ fontSize: '10px', color: '#0277BD' }}>{globalShards > 0 ? "Mining Active" : "Depleted"}</div>
+          </div>
       </div>
 
       {showCave && (
@@ -651,7 +765,6 @@ export default function Home() {
                 <div style={{ marginTop: '5px', background: '#E0F7FA', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #00E5FF' }}><span style={{ fontSize: '18px' }}>💎</span><span style={{ fontWeight: 'bold', color: '#006064' }}>Shards: {myPlayer.shards}</span></div>
                 <div style={{ marginTop: '5px', background: '#FFEBEE', padding: '5px 10px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '5px', border: '1px solid #D32F2F' }}><span style={{ fontSize: '18px' }}>☃️</span><span style={{ fontWeight: 'bold', color: '#C62828' }}>Snowmen: {myPlayer.trashCollected}</span></div>
                 
-                {/* 💎 MINING BUTTON MOVED HERE */}
                 <div className="mining-btn-internal" onClick={(e) => { e.stopPropagation(); setShowCave(true); }}>
                     <span style={{ fontSize: '24px' }}>⛏️</span>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -677,12 +790,26 @@ export default function Home() {
       {ripples.map(ripple => ( <div key={ripple.id} style={{ position: 'absolute', left: ripple.x, top: ripple.y, width: '0px', height: '0px', borderRadius: '50%', border: '4px solid rgba(255, 255, 255, 0.6)', transform: 'translate(-50%, -50%)', animation: 'rippleEffect 0.5s linear forwards', pointerEvents: 'none' }} /> ))}
       {floaters.map(f => ( <div key={f.id} style={{ position: 'absolute', left: f.x, top: f.y, color: '#D32F2F', fontWeight: 'bold', fontSize: '24px', pointerEvents: 'none', textShadow: '2px 2px 0px white', animation: 'floatUp 1s ease-out forwards' }}>{f.text}</div> ))}
 
-      {activeCoin && ( <div style={{ position: 'absolute', left: `${activeCoin.x}%`, top: `${activeCoin.y}%`, transform: 'translate(-50%, -50%)', pointerEvents: 'none', fontSize: '40px', animation: 'spin 2s linear infinite' }}>🪙</div> )}
-
+      {/* RENDER PLAYERS */}
       {Object.values(players).map((player) => (
         <div key={player.id} style={{ position: 'absolute', left: `${player.x}%`, top: `${player.y}%`, transform: 'translateX(-50%)', pointerEvents: 'none', transition: 'left 0.1s linear, top 0.1s linear, font-size 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 5, fontSize: `${player.size || 30}px` }}>
+          
           <div style={{ background: 'white', padding: '2px 8px', borderRadius: '10px', color: '#5D4037', fontSize: '10px', fontWeight: 'bold', marginBottom: '2px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', whiteSpace: 'nowrap' }}>{player.username || player.solanaAddress.slice(0, 4)}</div>
-          <img src="/avatar.png" alt="Avocado" style={{ width: `${player.size || 40}px`, height: 'auto', filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.2))', animation: 'float 2s ease-in-out infinite' }} />
+          
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              {/* SKIN / AVATAR */}
+              {player.equippedSkin ? (
+                  <div style={{ fontSize: `${(player.size || 30) * 1.5}px`, lineHeight: 1, animation: 'float 2s ease-in-out infinite' }}>{player.equippedSkin}</div>
+              ) : (
+                  <img src="/avatar.png" alt="Avocado" style={{ width: `${player.size || 40}px`, height: 'auto', filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.2))', animation: 'float 2s ease-in-out infinite' }} />
+              )}
+
+              {/* PET (Beside Avatar) */}
+              {player.equippedPet && (
+                  <div style={{ fontSize: `${(player.size || 30) * 0.6}px`, marginLeft: '5px', animation: 'bounce 1s infinite' }}>{player.equippedPet}</div>
+              )}
+          </div>
+
           {player.clicks > 0 && <div style={{ fontSize: '10px', color: '#FFF', background: '#388E3C', padding: '0 4px', borderRadius: '4px', marginTop: '-5px' }}>{player.clicks}</div>}
         </div>
       ))}

@@ -45,7 +45,7 @@ if (!MONGO_URI) {
       .catch(err => console.error("❌ MongoDB Connection Error:", err));
 }
 
-// 1. Define Schemas
+// 1. Define Schemas (Updated for Skins & Pets)
 const UserSchema = new mongoose.Schema({
     address: { type: String, required: true, unique: true },
     username: { type: String, default: "" },
@@ -54,7 +54,11 @@ const UserSchema = new mongoose.Schema({
     shards: { type: Number, default: 0 },
     trashCollected: { type: Number, default: 0 },
     dailyClicks: { type: Number, default: 0 },
-    lastDailyDate: { type: String, default: "" }
+    lastDailyDate: { type: String, default: "" },
+    // 🛒 SHOP FIELDS
+    inventory: { type: [String], default: [] }, 
+    equippedSkin: { type: String, default: "" }, // 🆕 Replaces 'equipped'
+    equippedPet: { type: String, default: "" }    // 🆕 New Pet Slot
 });
 
 const GameStateSchema = new mongoose.Schema({
@@ -66,6 +70,23 @@ const GameStateSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', UserSchema);
 const GameState = mongoose.model('GameState', GameStateSchema);
+
+// --- 🏪 SHOP CATALOG (Categorized) ---
+const SHOP_ITEMS = [
+    // SKINS (Replaces Avatar)
+    { id: 'santa', type: 'skin', name: 'Santa', price: 0, currency: 'coins', emoji: '🎅' },
+    { id: 'snowman', type: 'skin', name: 'Snowman', price: 50, currency: 'coins', emoji: '⛄' },
+    { id: 'alien', type: 'skin', name: 'Alien', price: 100, currency: 'coins', emoji: '👽' },
+    { id: 'robot', type: 'skin', name: 'Robot', price: 150, currency: 'coins', emoji: '🤖' },
+    { id: 'clown', type: 'skin', name: 'Clown', price: 50, currency: 'coins', emoji: '🤡' },
+    
+    // PETS (Follows You)
+    { id: 'dog', type: 'pet', name: 'Doggo', price: 20, currency: 'coins', emoji: '🐶' },
+    { id: 'cat', type: 'pet', name: 'Kitty', price: 20, currency: 'coins', emoji: '🐱' },
+    { id: 'fox', type: 'pet', name: 'Fox', price: 50, currency: 'shards', emoji: '🦊' },
+    { id: 'penguin', type: 'pet', name: 'Penguin', price: 10, currency: 'shards', emoji: '🐧' },
+    { id: 'chicken', type: 'pet', name: 'Chimken', price: 30, currency: 'coins', emoji: '🐔' }
+];
 
 // --- GAME MEMORY STATE ---
 interface Player {
@@ -81,16 +102,20 @@ interface Player {
   shards: number;
   trashCollected: number;
   dailyClicks: number;
+  inventory: string[];
+  equippedSkin: string; // 🆕
+  equippedPet: string;  // 🆕
 }
 
-interface Trash {
+interface Item {
     id: string;
     x: number;
     y: number;
 }
 
 let players: Record<string, Player> = {};
-let trashItems: Trash[] = []; 
+let trashItems: Item[] = []; 
+let coinItems: Item[] = [];
 let globalClicks = 0;
 let weeklyShards = 100;
 let currentBgColor = "#5D4037"; 
@@ -110,7 +135,7 @@ async function loadGameState() {
             state = await GameState.create({ 
                 id: 'global', 
                 weeklyShards: 100, 
-                totalClicks: 0, // Fresh start logic
+                totalClicks: 1000, 
                 currentBgColor: "#5D4037" 
             });
         }
@@ -127,6 +152,8 @@ io.on('connection', (socket) => {
   socket.on('join_game', async (address: string) => {
     let userClicks = 0, userCoins = 0, userShards = 0, userDaily = 0, userTrash = 0;
     let userDisplayName = "";
+    let userInventory: string[] = ['santa']; // Default item
+    let userSkin = "", userPet = "";
 
     if (isDbConnected) {
         try {
@@ -134,7 +161,19 @@ io.on('connection', (socket) => {
             const today = new Date().toDateString();
 
             if (!user) {
-                user = await User.create({ address, username: "", clicks: 0, coins: 0, shards: 0, trashCollected: 0, dailyClicks: 0, lastDailyDate: today });
+                user = await User.create({ 
+                    address, 
+                    username: "", 
+                    clicks: 0, 
+                    coins: 0, 
+                    shards: 0, 
+                    trashCollected: 0, 
+                    dailyClicks: 0, 
+                    lastDailyDate: today, 
+                    inventory: ['santa'], 
+                    equippedSkin: "", 
+                    equippedPet: "" 
+                });
             } else {
                 if (user.lastDailyDate !== today) {
                     user.dailyClicks = 0;
@@ -148,6 +187,9 @@ io.on('connection', (socket) => {
             userTrash = user.trashCollected || 0;
             userDaily = user.dailyClicks;
             userDisplayName = user.username || "";
+            userInventory = user.inventory || ['santa'];
+            userSkin = user.equippedSkin || "";
+            userPet = user.equippedPet || "";
         } catch (e) { console.error("Error loading user:", e); }
     }
 
@@ -163,10 +205,14 @@ io.on('connection', (socket) => {
       coins: userCoins,
       shards: userShards,
       trashCollected: userTrash,
-      dailyClicks: userDaily
+      dailyClicks: userDaily,
+      inventory: userInventory,
+      equippedSkin: userSkin,
+      equippedPet: userPet
     };
 
     socket.emit('your_daily_progress', userDaily);
+    socket.emit('shop_data', SHOP_ITEMS); // Send Catalog
 
     socket.emit('init_state', { 
         players, 
@@ -176,6 +222,7 @@ io.on('connection', (socket) => {
     });
     
     socket.emit('trash_sync', trashItems);
+    socket.emit('coin_sync', coinItems);
 
     if (isDbConnected) {
         try {
@@ -195,6 +242,91 @@ io.on('connection', (socket) => {
     }
     
     io.emit('player_joined', players[socket.id]);
+  });
+
+  // 🛒 BUY ITEM LISTENER
+  socket.on('buy_item', async (itemId: string) => {
+      const player = players[socket.id];
+      const item = SHOP_ITEMS.find(i => i.id === itemId);
+      
+      if (player && item) {
+          if (player.inventory.includes(itemId)) return; // Already owned
+
+          let canAfford = false;
+          if (item.currency === 'coins' && player.coins >= item.price) canAfford = true;
+          if (item.currency === 'shards' && player.shards >= item.price) canAfford = true;
+
+          if (canAfford) {
+              // Deduct Cost
+              if (item.currency === 'coins') player.coins -= item.price;
+              else player.shards -= item.price;
+
+              // Add to Inventory
+              player.inventory.push(itemId);
+              
+              // Update Client
+              socket.emit('purchase_success', { 
+                  itemId, 
+                  coins: player.coins, 
+                  shards: player.shards,
+                  inventory: player.inventory 
+              });
+
+              // Save DB
+              if (isDbConnected) {
+                  await User.updateOne(
+                      { address: player.solanaAddress }, 
+                      { 
+                          $set: { coins: player.coins, shards: player.shards },
+                          $push: { inventory: itemId }
+                      }
+                  );
+              }
+          }
+      }
+  });
+
+  // 🛒 EQUIP ITEM LISTENER (Updated for Skins/Pets)
+  socket.on('equip_item', async (itemId: string) => {
+      const player = players[socket.id];
+      if (player && player.inventory.includes(itemId)) {
+          const item = SHOP_ITEMS.find(i => i.id === itemId);
+          if (item) {
+              if (item.type === 'skin') {
+                  player.equippedSkin = item.emoji;
+                  if (isDbConnected) await User.updateOne({ address: player.solanaAddress }, { equippedSkin: item.emoji });
+              } else if (item.type === 'pet') {
+                  player.equippedPet = item.emoji;
+                  if (isDbConnected) await User.updateOne({ address: player.solanaAddress }, { equippedPet: item.emoji });
+              }
+              
+              // Broadcast update
+              io.emit('player_updated', { 
+                  id: socket.id, 
+                  equippedSkin: player.equippedSkin,
+                  equippedPet: player.equippedPet 
+              }); 
+          }
+      }
+  });
+
+  // 🛒 UNEQUIP LISTENER
+  socket.on('unequip_item', async (type: 'skin' | 'pet') => {
+      const player = players[socket.id];
+      if (player) {
+          if (type === 'skin') {
+              player.equippedSkin = "";
+              if (isDbConnected) await User.updateOne({ address: player.solanaAddress }, { equippedSkin: "" });
+          } else {
+              player.equippedPet = "";
+              if (isDbConnected) await User.updateOne({ address: player.solanaAddress }, { equippedPet: "" });
+          }
+          io.emit('player_updated', { 
+              id: socket.id, 
+              equippedSkin: player.equippedSkin, 
+              equippedPet: player.equippedPet 
+          });
+      }
   });
 
   socket.on('set_username', async (name: string) => {
@@ -248,6 +380,24 @@ io.on('connection', (socket) => {
                   trashId, 
                   collectorId: socket.id, 
                   newCount: players[socket.id].trashCollected 
+              });
+          }
+      }
+  });
+
+  socket.on('collect_coin', (coinId: string) => {
+      const index = coinItems.findIndex(c => c.id === coinId);
+      if (index !== -1) {
+          coinItems.splice(index, 1); 
+          if (players[socket.id]) {
+              players[socket.id].coins += 1; 
+              if (isDbConnected) {
+                  User.updateOne({ address: players[socket.id].solanaAddress }, { $inc: { coins: 1 } }).catch(()=>{});
+              }
+              io.emit('coin_collected_map', { 
+                  coinId, 
+                  collectorId: socket.id, 
+                  newCoins: players[socket.id].coins 
               });
           }
       }
@@ -333,29 +483,29 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- ☠️ THE GAME LOOP ---
 setInterval(async () => {
-    // 🆕 RESTRICT SPAWNING: ONLY IF SCORE >= 100
     if (globalClicks >= 100 && trashItems.length < 10 && Math.random() < 0.1) {
-        const newTrash = {
-            id: Date.now().toString(),
-            x: Math.random() * 80 + 10,
-            y: Math.random() * 80 + 10
-        };
+        const newTrash = { id: Date.now().toString(), x: Math.random() * 80 + 10, y: Math.random() * 80 + 10 };
         trashItems.push(newTrash);
         io.emit('trash_spawned', newTrash);
+    }
+
+    if (coinItems.length < 5 && Math.random() < 0.05) {
+        const newCoin = { id: "c" + Date.now().toString(), x: Math.random() * 80 + 10, y: Math.random() * 80 + 10 };
+        coinItems.push(newCoin);
+        io.emit('coin_spawned', newCoin);
     }
 
     if (trashItems.length > 0) {
         const damage = trashItems.length * 1; 
         globalClicks = Math.max(0, globalClicks - damage);
-        
         io.emit('score_damage', { globalClicks, damage });
 
         if (globalClicks <= 0) {
             console.log("💀 GAME OVER - WIPING DATA");
-            globalClicks = 1000; // Reset to 1000 buffer
+            globalClicks = 1000; 
             trashItems = []; 
+            coinItems = [];
             Object.values(players).forEach(p => {
                 p.clicks = 0; p.coins = 0; p.shards = 0; p.trashCollected = 0;
             });
